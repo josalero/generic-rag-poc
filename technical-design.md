@@ -32,7 +32,7 @@
 18. [Extensibility Checklist](#18-extensibility-checklist)
 19. [Human-in-the-Loop and Feedback](#19-human-in-the-loop-and-feedback)
 
-**Child Documents:** [Ingestion Pipeline](./ingestion-pipeline.md) | [Query Pipeline](./query-pipeline.md) | [Extraction Strategies](./extraction-strategies.md) | [Domain Configuration Guide](./domain-configuration-guide.md) | [Framework Code](./framework-code.md)
+**Child Documents:** [Ingestion Pipeline](./ingestion-pipeline.md) | [Query Pipeline](./query-pipeline.md) | [Extraction Strategies](./extraction-strategies.md) | [Domain Configuration Guide](./domain-configuration-guide.md) | [Framework Code](./framework-code.md) | [Implementation Plan](./implementation-plan.md)
 
 ---
 
@@ -57,6 +57,7 @@ Stack: Spring Boot 4 + LangChain4j 1.11 + PGVector.
 | Document | Content |
 |---|---|
 | [framework-code.md](./framework-code.md) | Complete Java code samples — all interfaces, engine classes, model registry, strategies, services, controllers, auto-configuration |
+| [implementation-plan.md](./implementation-plan.md) | Implementation plan — quality gates, testable iterations, and mapping of all framework-code to incremental deliverables |
 | [ingestion-pipeline.md](./ingestion-pipeline.md) | 10-phase ingestion flow — validation, parsing, classification, extraction, splitting, embedding, storage, dedup, error handling, concurrency model |
 | [query-pipeline.md](./query-pipeline.md) | 9-phase query flow — guardrails, retrieval, hybrid re-ranking, deduplication, LLM generation, pagination, caching |
 | [extraction-strategies.md](./extraction-strategies.md) | Each strategy in detail (regex, LLM, keyword, composite) with execution flows, code samples, and selection guide |
