@@ -7,7 +7,7 @@
 ## 1. Pipeline Overview
 
 The ingestion pipeline transforms raw documents (PDF, DOCX, TXT) into embedded text segments
-stored in PGVector, enriched with domain-specific and doc_type-specific metadata.
+stored in PGVector, enriched with domain-specific and doc_type-specific metadata. The platform supports **English and Spanish** (and multilingual embeddings); query-side language handling (stop words, answer language) is in [query-pipeline.md](./query-pipeline.md) and [technical-design.md § 22](./technical-design.md#22-supported-languages-english-and-spanish).
 
 ```mermaid
 flowchart TD
@@ -836,4 +836,4 @@ domain:
   documents-path: ./downloaded-resumes
 ```
 
-**Embedding and LLM models:** Production = benchmark-grade (e.g. OpenAI); development = free/low-cost (in-process embeddings, OpenRouter free). See [model-recommendations.md](./model-recommendations.md). Extraction model is set per domain in `models.extraction`.
+**Embedding and LLM models:** All API access is **via OpenRouter**. Production = benchmark-grade (e.g. openai/gpt-4o-mini, openai/text-embedding-3-small); development = free/low-cost (in-process embeddings, OpenRouter free). See [model-recommendations.md](./model-recommendations.md). Extraction model is set per domain in `models.extraction`.

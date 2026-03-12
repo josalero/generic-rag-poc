@@ -6,6 +6,10 @@ This document breaks the proposed framework into **testable iterations** with **
 
 **Custom algorithms vs LLM:** The design prefers **custom algorithms** (regex, keyword, composite, deterministic guardrails) where they preserve quality, and uses the **LLM** only for answer generation, free-form summarization, and nuanced guardrails. When implementing extraction and guardrails, favor regex/keyword/composite first so most flows avoid LLM calls. See [technical-design.md § 21 Custom algorithms vs LLM](./technical-design.md#21-custom-algorithms-vs-llm).
 
+**Prefer configurable tools over hardcoding (guardrails excluded):** For all areas **except guardrails**, prefer configurable tools and algorithms instead of hardcoded setup: stop words from YAML or resource files (not in code); extraction strategies and patterns from domain YAML; classification rules from YAML; model definitions from `application.yml`; parser selection via registry/config; prompts from domain YAML. Guardrails remain as designed (YAML-defined rules); the preference for config/tools applies to stop words, extraction, classification, models, parsers, and prompts.
+
+**Dev vs prod:** The app supports **production** and **development** environment setups via Spring profiles. **All LLM and embedding API access is via OpenRouter** (no direct OpenAI or other provider clients); prod uses benchmark-grade models through OpenRouter, dev uses free/low-cost or in-process embeddings. **Languages:** The platform supports **English (en)** and **Spanish (es)** for query-term extraction (language-specific stop words), optional answer language, and prompt localization. See [§ 16 Environment setup (dev vs prod)](#16-environment-setup-dev-vs-prod), [model-recommendations.md](./model-recommendations.md), and [technical-design.md § 22 Supported languages](./technical-design.md#22-supported-languages-english-and-spanish).
+
 ---
 
 ## Table of Contents
@@ -25,7 +29,8 @@ This document breaks the proposed framework into **testable iterations** with **
 13. [Iteration 11 — REST controllers](#13-iteration-11--rest-controllers)
 14. [Iteration 12 — Auto-configuration & wiring](#14-iteration-12--auto-configuration--wiring)
 15. [Iteration 13 — Production hardening](#15-iteration-13--production-hardening)
-16. [Optional iterations](#16-optional-iterations)
+16. [Environment setup (dev vs prod)](#16-environment-setup-dev-vs-prod)
+17. [Optional iterations](#17-optional-iterations)
 
 ---
 
@@ -65,6 +70,7 @@ These gates apply to **every iteration** before merge. They keep the codebase bu
 - **JaCoCo** coverage report; fail build below 80% on new code
 - **Conventional commits** for each commit (`feat:`, `fix:`, `test:`, `chore:`)
 - **Domain YAML authoring:** Prefer regex/keyword/composite for structured metadata; use LLM only where § 21 indicates (summaries, variable phrasing, nuanced guardrails)
+- **Config over hardcoding:** Where a configurable alternative exists (stop words, extraction patterns, classification rules, model defs, prompts, parser selection), implement it via config/YAML/resource files rather than hardcoding in code; guardrails are excluded from this preference and remain YAML-defined as designed
 
 ---
 
@@ -154,7 +160,7 @@ flowchart TD
 
 ## 4. Iteration 2 — Config & model registry
 
-**Goal:** Load model definitions from `application.yml` (and profile-specific `application-{profile}.yml`) and provide a `ModelRegistry` that resolves a model id to a `ChatModel`. Add general stop words (config or resource file). Config should support both prod and dev profiles (Iteration 12 adds the profile files).
+**Goal:** Load model definitions from `application.yml` (and profile-specific `application-{profile}.yml`) and provide a `ModelRegistry` that resolves a model id to a `ChatModel`. Add general stop words (config or resource file). Config should support both prod and dev profiles (Iteration 12 adds the profile files). **Prefer:** No hardcoded model URLs or stop-word lists in code — use config/resource files or YAML only.
 
 ### 4.1 Deliverables (framework-code.md)
 
@@ -168,8 +174,8 @@ flowchart TD
 ### 4.2 Acceptance criteria
 
 - `ModelRegistry.resolve(modelId)` returns a `ChatModel` for a configured id; unknown id throws or returns optional (align with framework-code).
-- General stop words load from `app.query.general-stop-words` (list) or `app.query.general-stop-words-file` (classpath file); fallback to default English set when both empty.
-- Bean `Set<String> generalStopWords` available for injection.
+- General stop words load from `app.query.general-stop-words` (list) or `app.query.general-stop-words-file` (classpath file); fallback to default English set when both empty. **Language support (en, es):** support per-locale files (e.g. `general-stop-words-file-es`) and a provider or bean that returns the correct set for the request language.
+- Bean `Set<String> generalStopWords` (or locale-aware provider) available for injection; supported languages: **en**, **es**.
 
 ### 4.3 Tests to add
 
@@ -185,7 +191,7 @@ flowchart TD
 
 ## 5. Iteration 3 — Extraction strategies (no LLM)
 
-**Goal:** Implement regex, keyword, and composite extraction strategies and the factory. Composite may chain regex + keyword only (LLM sub-strategy in Iteration 7). These **custom algorithms** cover most structured metadata (dates, IDs, categories) without LLM; see [technical-design.md § 21](./technical-design.md#21-custom-algorithms-vs-llm).
+**Goal:** Implement regex, keyword, and composite extraction strategies and the factory. Composite may chain regex + keyword only (LLM sub-strategy in Iteration 7). These **custom algorithms** cover most structured metadata (dates, IDs, categories) without LLM; see [technical-design.md § 21](./technical-design.md#21-custom-algorithms-vs-llm). **Prefer:** Strategies and patterns (regex, keyword maps) come from domain YAML/config — no hardcoded patterns or category maps in code.
 
 ### 5.1 Deliverables (framework-code.md)
 
@@ -249,7 +255,7 @@ flowchart TD
 
 ## 7. Iteration 5 — Document parsers
 
-**Goal:** Parse PDF, DOCX, and plain text into raw text. Registry selects parser by filename.
+**Goal:** Parse PDF, DOCX, and plain text into raw text. Registry selects parser by filename. **Prefer:** Parser selection and supported types driven by registry/config (e.g. which parsers are registered, which file types a domain supports from YAML) — no hardcoded parser list or extensions in code.
 
 ### 7.1 Deliverables (framework-code.md)
 
@@ -281,7 +287,7 @@ flowchart TD
 
 ## 8. Iteration 6 — Config-driven engine (YAML loader + classifier, prompts, guardrails)
 
-**Goal:** Load domain YAML from a path, build a `ConfigDrivenRagDomain` with classifier, prompt provider, and guardrail evaluator. No metadata extraction yet (no LLM, no extractors). Classifier and deterministic guardrails are **custom-algorithm** steps per § 21 (no LLM required for quality).
+**Goal:** Load domain YAML from a path, build a `ConfigDrivenRagDomain` with classifier, prompt provider, and guardrail evaluator. No metadata extraction yet (no LLM, no extractors). Classifier and deterministic guardrails are **custom-algorithm** steps per § 21 (no LLM required for quality). **Prefer:** All classifier rules, prompts, and guardrail rule definitions loaded from domain YAML — no hardcoded rules or prompt templates in code.
 
 ### 8.1 Deliverables (framework-code.md)
 
@@ -314,7 +320,7 @@ flowchart TD
 
 ## 9. Iteration 7 — Config-driven metadata + LLM strategy
 
-**Goal:** Add metadata extraction to the config-driven engine: load field definitions from YAML, run regex/keyword/composite/LLM strategies. Wire `LlmExtractionStrategy` with a `ChatModel` (mock in tests). **Composite must try regex/keyword before LLM** so custom algorithms handle structured fields first; LLM is fallback for free-form or variable content (see [technical-design.md § 21](./technical-design.md#21-custom-algorithms-vs-llm)).
+**Goal:** Add metadata extraction to the config-driven engine: load field definitions from YAML, run regex/keyword/composite/LLM strategies. Wire `LlmExtractionStrategy` with a `ChatModel` (mock in tests). **Composite must try regex/keyword before LLM** so custom algorithms handle structured fields first; LLM is fallback for free-form or variable content (see [technical-design.md § 21](./technical-design.md#21-custom-algorithms-vs-llm)). **Prefer:** Field definitions, strategy types, and model overrides from domain YAML only — no hardcoded field lists or extraction logic in code; LLM only where configured.
 
 ### 9.1 Deliverables (framework-code.md)
 
@@ -411,11 +417,11 @@ flowchart TD
 
 ### 12.2 Acceptance criteria
 
-- Input: domainId, question, optional filters (docTypes, maxResults, minScore, page, pageSize). Resolve domain; evaluate guardrails (block → return blocked result); extract terms (general + domain stop words); retrieve from store with domain filter; hybrid scoring; deduplicate by entity/source; generate answer via domain’s prompt template and query model; paginate; return answer + results + explainability.
+- Input: domainId, question, optional filters (docTypes, maxResults, minScore, page, pageSize), optional **language** (en, es). Resolve domain; resolve language from body or Accept-Language or default locale; evaluate guardrails (block → return blocked result); extract terms using **language-appropriate** general stop words (en/es) + domain stop words; retrieve from store with domain filter; hybrid scoring; deduplicate by entity/source; generate answer via domain’s prompt template and query model; paginate; return answer + results + explainability.
 
 ### 12.3 Tests to add
 
-- `DomainQueryServiceTest`: mocked registry (one domain with stub classifier, guardrails, prompt provider, model config), mocked retriever (returns fixed list of contents), mocked `ChatModel` (returns fixed answer); call query; assert answer text, that guardrail was called, that retriever was called with domain filter. Test guardrail blocked → result is blocked. Test term extraction uses domain + general stop words when both provided.
+- `DomainQueryServiceTest`: mocked registry (one domain with stub classifier, guardrails, prompt provider, model config), mocked retriever (returns fixed list of contents), mocked `ChatModel` (returns fixed answer); call query; assert answer text, that guardrail was called, that retriever was called with domain filter. Test guardrail blocked → result is blocked. Test term extraction uses domain + general stop words when both provided. Test with `language: "es"` uses Spanish stop words when provider is locale-aware.
 
 ### 12.4 Quality gates
 
@@ -455,7 +461,7 @@ flowchart TD
 
 ## 14. Iteration 12 — Auto-configuration, wiring, and prod/dev profiles
 
-**Goal:** Wire all beans so the application starts with domain YAMLs loaded and registry populated. Introduce **production** and **development** profiles so prod uses benchmark-grade models and dev uses free/low-cost models (see [model-recommendations.md](./model-recommendations.md)).
+**Goal:** Wire all beans so the application starts with domain YAMLs loaded and registry populated. Introduce **production** and **development** profiles so prod uses benchmark-grade models and dev uses free/low-cost models. Delivered config must support both env setups as described in [§ 16 Environment setup (dev vs prod)](#16-environment-setup-dev-vs-prod); see also [model-recommendations.md](./model-recommendations.md).
 
 ### 14.1 Deliverables (framework-code.md)
 
@@ -472,7 +478,7 @@ flowchart TD
 ### 14.2 Acceptance criteria
 
 - On startup, loader reads from `app.domains.definitions-path`; registry contains all enabled domains.
-- **Profile `prod` (or default):** Uses API embedding (OpenAI) and benchmark chat model definitions; PGVector schema/documentation assumes 1536.
+- **Profile `prod` (or default):** Uses API embedding and chat **via OpenRouter** (e.g. openai/gpt-4o-mini, openai/text-embedding-3-small); PGVector schema/documentation assumes 1536. Single `OPENROUTER_API_KEY`; no direct OpenAI or other provider clients.
 - **Profile `dev`:** Uses in-process ONNX embedding (384) and OpenRouter free chat definitions; PGVector for dev uses 384; separate DB or schema from prod.
 - Ingest and query endpoints work end-to-end with a test domain in both profiles (where applicable; dev may rely on OPENROUTER_API_KEY).
 - Health or info endpoint (optional) reports loaded domains and active profile or embedding type.
@@ -489,7 +495,7 @@ flowchart TD
 - `./gradlew bootRun` (or run with `--spring.profiles.active=prod` and with `dev`) starts without error.
 - `./gradlew test` passes; profile-specific tests do not require real API keys (use test profile with mocks or skip external calls).
 
-**Limitations of dev (free/low-cost) models:** See [model-recommendations.md § 4](./model-recommendations.md#4-limitations-of-free-and-low-cost-options) (rate limits, quality, dimensions, no SLA). Do not use dev models for benchmark reporting or production.
+**Limitations of dev (free/low-cost) models:** See [model-recommendations.md § 4](./model-recommendations.md#4-limitations-of-free-and-low-cost-options) (rate limits, quality, dimensions, no SLA). Do not use dev models for benchmark reporting or production. Full env setup: [§ 16 Environment setup (dev vs prod)](#16-environment-setup-dev-vs-prod).
 
 ---
 
@@ -526,7 +532,68 @@ flowchart TD
 
 ---
 
-## 16. Optional iterations
+## 16. Environment setup (dev vs prod)
+
+The implementation assumes two environment setups: **production** (benchmark-grade models, API embeddings) and **development** (free/low-cost models, in-process embeddings). **All LLM and embedding API access is via OpenRouter** — use `OPENROUTER_API_KEY` only; no direct OpenAI or other provider clients. Iteration 12 delivers the profile-specific config and wiring; this section summarizes what each env needs so the plan and runbooks stay aligned.
+
+### 16.1 How to run
+
+| Environment | Activate profile | Command / config |
+|-------------|------------------|-------------------|
+| **Production** | `prod` (or default) | `spring.profiles.active=prod` or set default in `application.yml`; or `--spring.profiles.active=prod` when running. |
+| **Development** | `dev` | `spring.profiles.active=dev` or `--spring.profiles.active=dev`. |
+| **Test** | `test` | Used by tests; `@ActiveProfiles("test")` or `application-test.yml` with mocks / in-memory DB. |
+
+### 16.2 Production setup
+
+| Item | Value |
+|------|--------|
+| **Profile** | `prod` (or no profile if prod is default) |
+| **Config file** | `application.yml` + `application-prod.yml` |
+| **Embedding** | Via OpenRouter (e.g. `openai/text-embedding-3-small`); `app.models.embedding: "openai/text-embedding-3-small"` |
+| **Chat models** | `gpt-4o-mini`, `gpt-4o` (and optional Claude) in `app.models.definitions` |
+| **PGVector dimension** | **1536** (match embedding model) |
+| **Database** | Dedicated prod DB; do not share with dev (different dimension). |
+| **Env vars** | `OPENROUTER_API_KEY` only (all model API access via OpenRouter); `SPRING_DATASOURCE_URL` (prod DB). |
+
+### 16.3 Development setup
+
+| Item | Value |
+|------|--------|
+| **Profile** | `dev` |
+| **Config file** | `application.yml` + `application-dev.yml` |
+| **Embedding** | In-process ONNX (e.g. BGE small quantized); `app.models.embedding: "in-process"`; bean wired in config when profile is dev. |
+| **Chat models** | `extraction-free`, `query-free` (OpenRouter `openrouter/free`) in `app.models.definitions` |
+| **PGVector dimension** | **384** (in-process models) |
+| **Database** | **Separate** from prod (e.g. different DB name or schema) so 384-dim store is isolated. |
+| **Env vars** | `OPENROUTER_API_KEY` (free tier); `SPRING_DATASOURCE_URL` (dev DB, if different from prod). |
+
+### 16.4 Test setup
+
+| Item | Value |
+|------|--------|
+| **Profile** | `test` |
+| **Config file** | `application-test.yml` (optional) |
+| **Embedding** | In-process or mock (no real API). |
+| **Chat models** | Mock `ChatModel` or stub; no real API keys in tests. |
+| **Database** | In-memory (H2) or Testcontainers; dimension can match dev (384) for consistency. |
+
+### 16.5 Checklist for Iteration 12
+
+When implementing Iteration 12, ensure:
+
+- [ ] `application.yml` is base-only (no profile-specific model definitions).
+- [ ] `application-prod.yml` exists with prod embedding id and chat model definitions; PGVector 1536 documented or configured.
+- [ ] `application-dev.yml` exists with `embedding: "in-process"` and extraction-free / query-free definitions; PGVector 384 documented or configured.
+- [ ] Embedding bean is profile-aware (in-process when dev, API when prod).
+- [ ] Docs or README state how to run with `prod` and `dev` and that dev must use a separate DB/schema.
+- [ ] Tests use a test profile and do not require prod or dev API keys.
+
+Full model and limitation details: [model-recommendations.md](./model-recommendations.md).
+
+---
+
+## 17. Optional iterations
 
 These can be scheduled after the core 13 iterations.
 
@@ -556,6 +623,7 @@ These can be scheduled after the core 13 iterations.
 | 11 | REST controllers | Slice / MockMvc |
 | 12 | Auto-config, wiring, prod/dev profiles | SpringBootTest (prod + dev profile) |
 | 13 | Exception handling, validation, health | Unit + controller |
+| — | **Env reference** | [§ 16 Environment setup (dev vs prod)](#16-environment-setup-dev-vs-prod) |
 | Optional | Override, feedback, reload, SSE | Per feature |
 
 Quality gates (build, tests, coverage, lint, no PII, meaningful assertions) apply to every iteration. Each iteration links to [framework-code.md](./framework-code.md) for the exact code to implement. When authoring domain YAML or adding extraction/guardrail logic, prefer **custom algorithms** (regex, keyword, composite, term/pattern guardrails) first; use LLM only where needed for quality — see [technical-design.md § 21](./technical-design.md#21-custom-algorithms-vs-llm).

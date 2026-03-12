@@ -213,6 +213,7 @@ public record ModelDefinitionProperties(
     public record ModelEntry(
             String provider,
             String apiKey,
+            String baseUrl,
             String modelName,
             double temperature,
             int maxTokens,
@@ -229,7 +230,7 @@ public record ModelDefinitionProperties(
 
 ### 2.2 ModelRegistry
 
-Resolves a model ID to a `ChatModel` instance. Models are built lazily and cached.
+Resolves a model ID to a `ChatModel` instance. Models are built lazily and cached. **All remote API access is via OpenRouter** — no direct OpenAI or other provider clients. OpenAI and other models are used through OpenRouter (e.g. `openai/gpt-4o-mini`); the registry uses OpenRouter’s base URL and a single `OPENROUTER_API_KEY`.
 
 ```java
 package com.example.rag.config;
@@ -266,27 +267,23 @@ public class ModelRegistry {
                     .formatted(modelId, properties.definitions().keySet()));
         }
 
-        return switch (entry.provider()) {
-            case "openai" -> OpenAiChatModel.builder()
-                    .apiKey(entry.apiKey())
-                    .modelName(entry.modelName())
-                    .temperature(entry.temperature())
-                    .maxTokens(entry.maxTokens())
-                    .timeout(Duration.ofSeconds(entry.timeoutSeconds()))
-                    .build();
-
-            case "openrouter" -> OpenAiChatModel.builder()
-                    .baseUrl("https://openrouter.ai/api/v1")
-                    .apiKey(entry.apiKey())
-                    .modelName(entry.modelName())
-                    .temperature(entry.temperature())
-                    .maxTokens(entry.maxTokens())
-                    .timeout(Duration.ofSeconds(entry.timeoutSeconds()))
-                    .build();
-
-            default -> throw new IllegalArgumentException(
-                    "Unsupported model provider: '%s'".formatted(entry.provider()));
-        };
+        // All remote models via OpenRouter (OpenAI-compatible API). baseUrl from config or default.
+        String baseUrl = entry.baseUrl() != null && !entry.baseUrl().isBlank()
+                ? entry.baseUrl()
+                : "https://openrouter.ai/api/v1";
+        if (!"openrouter".equals(entry.provider())) {
+            throw new IllegalArgumentException(
+                    "Only provider 'openrouter' is supported (all models via OpenRouter). Got: '%s'"
+                            .formatted(entry.provider()));
+        }
+        return OpenAiChatModel.builder()
+                .baseUrl(baseUrl)
+                .apiKey(entry.apiKey())
+                .modelName(entry.modelName())
+                .temperature(entry.temperature())
+                .maxTokens(entry.maxTokens())
+                .timeout(Duration.ofSeconds(entry.timeoutSeconds()))
+                .build();
     }
 }
 ```
@@ -295,26 +292,28 @@ public class ModelRegistry {
 
 Design supports **market benchmark** (production) and **free/low-cost** (development). Use **production** config by default; use **development** when `spring.profiles.active=dev`. See [model-recommendations.md](./model-recommendations.md).
 
-**Production (default) — benchmark-grade:**
+**Production (default) — benchmark-grade. All models via OpenRouter; no direct OpenAI or other provider APIs. Use `OPENROUTER_API_KEY` only.**
 
 ```yaml
 # application.yml or application-prod.yml
 app:
   models:
     default-model: "gpt-4o-mini"
-    embedding: "text-embedding-3-small"
+    embedding: "openai/text-embedding-3-small"
     definitions:
       gpt-4o-mini:
-        provider: openai
-        api-key: ${OPENAI_API_KEY}
-        model-name: gpt-4o-mini
+        provider: openrouter
+        api-key: ${OPENROUTER_API_KEY}
+        base-url: https://openrouter.ai/api/v1
+        model-name: openai/gpt-4o-mini
         temperature: 0.1
         max-tokens: 2048
         timeout-seconds: 30
       gpt-4o:
-        provider: openai
-        api-key: ${OPENAI_API_KEY}
-        model-name: gpt-4o
+        provider: openrouter
+        api-key: ${OPENROUTER_API_KEY}
+        base-url: https://openrouter.ai/api/v1
+        model-name: openai/gpt-4o
         temperature: 0.1
         max-tokens: 4096
         timeout-seconds: 60
@@ -359,7 +358,7 @@ Domain YAML can use **neutral aliases** (`extraction`, `query`) and define them 
 
 ### 2.4 General stop words (config / resource file)
 
-Avoid hardcoding general stop words. Load them from application config or a resource file. See [technical-design.md § 14.1 General stop words](./technical-design.md#141-general-stop-words--non-hardcoded-options) for options (YAML list, resource file, Lucene, OpenNLP).
+Avoid hardcoding general stop words. Load them from application config or a resource file. The platform supports **English (en)** and **Spanish (es)**; provide language-specific sets so the correct stop words are used per query language (e.g. `general-stop-words-file` for default locale, `general-stop-words-file-es` for Spanish). See [technical-design.md § 14.1 General stop words](./technical-design.md#141-general-stop-words--non-hardcoded-options) and [§ 22 Supported languages](./technical-design.md#22-supported-languages-english-and-spanish).
 
 **Option A — YAML list** in `application.yml`:
 
@@ -395,7 +394,7 @@ app:
       - them
 ```
 
-**Option B — Resource file** (one word per line), e.g. `src/main/resources/stopwords/general-en.txt`. Use `general-stop-words-file: classpath:stopwords/general-en.txt` and load at startup.
+**Option B — Resource file** (one word per line), e.g. `src/main/resources/stopwords/general-en.txt`. Use `general-stop-words-file: classpath:stopwords/general-en.txt` for the default locale (en). For **Spanish**, add `general-stop-words-file-es: classpath:stopwords/general-es.txt` and implement a provider that returns the set for the request locale (en or es).
 
 **Bean that provides the set** (inject into `DomainQueryService`):
 
@@ -454,7 +453,7 @@ public class StopWordsConfig {
 }
 ```
 
-Use file when set; otherwise use YAML list; if both empty, fall back to default English set. `DomainQueryService` receives `Set<String> generalStopWords` via constructor injection and merges with `domain.stopWords()`.
+Use file when set; otherwise use YAML list; if both empty, fall back to default English set. For **multi-language (en, es)** support, either inject a `StopWordsProvider` that accepts a locale and returns the appropriate set (loading from `general-stop-words-file` for `en` and `general-stop-words-file-es` for `es`), or inject a single merged set when only one language is used. `DomainQueryService` receives general stop words (per locale or single set) and merges with `domain.stopWords()`; it uses the request language (from query body or `Accept-Language`) to resolve the locale.
 
 ---
 

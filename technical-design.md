@@ -33,6 +33,7 @@
 19. [Human-in-the-Loop and Feedback](#19-human-in-the-loop-and-feedback)
 20. [OCR and image document support](#20-ocr-and-image-document-support)
 21. [Custom algorithms vs LLM](#21-custom-algorithms-vs-llm)
+22. [Supported languages (English and Spanish)](#22-supported-languages-english-and-spanish)
 
 **Child Documents:** [Ingestion Pipeline](./ingestion-pipeline.md) | [Query Pipeline](./query-pipeline.md) | [Extraction Strategies](./extraction-strategies.md) | [Domain Configuration Guide](./domain-configuration-guide.md) | [Framework Code](./framework-code.md) | [Implementation Plan](./implementation-plan.md) | [Model Recommendations](./model-recommendations.md)
 
@@ -53,6 +54,10 @@ Adding a new domain = adding a YAML file. Adding a new document type = adding a 
 No Java changes required.
 
 Stack: Spring Boot 4 + LangChain4j 1.11 + PGVector.
+
+**All LLM and embedding API access is via OpenRouter.** OpenAI and other provider models (e.g. GPT-4o, Claude) are used **through OpenRouter** (e.g. `openai/gpt-4o-mini`), not via direct OpenAI or other provider clients. A single `OPENROUTER_API_KEY` is used for chat and for API-based embeddings in production; development may use in-process embeddings (no key) and OpenRouter free-tier models.
+
+The platform **supports multiple languages**. Initially **English (en)** and **Spanish (es)** are supported: language-specific stop words for query-term extraction, optional answer language on the query request, and extensible prompt localization in domain YAML. See [§ 22 Supported languages](#22-supported-languages-english-and-spanish).
 
 ### Child Documents
 
@@ -83,6 +88,7 @@ Stack: Spring Boot 4 + LangChain4j 1.11 + PGVector.
 | Two-level metadata | Shared base keys + doc_type-specific extensions; avoids sparse flat schemas |
 | Strategy pattern everywhere | Extraction, classification, guardrails, and prompts are pluggable strategies resolved from config |
 | Model-per-purpose | Each domain declares which LLM to use for extraction vs. query answering; individual fields can override |
+| **OpenRouter only** | All chat and API-based embedding calls go through OpenRouter; OpenAI and other models are referenced as e.g. `openai/gpt-4o-mini`. No direct OpenAI (or other provider) API keys. |
 
 ### 2.2 SOLID Mapping
 
@@ -481,7 +487,7 @@ resolution, LLM fallback, in-flight query deduplication, LRU caching, explainabi
 ```sql
 CREATE TABLE IF NOT EXISTS document_embeddings (
     embedding_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    embedding      vector(1536),  -- production: OpenAI text-embedding-3-small; dev: use 384 for in-process ONNX (separate DB/schema)
+    embedding      vector(1536),  -- production: via OpenRouter (e.g. openai/text-embedding-3-small); dev: 384 for in-process ONNX (separate DB/schema)
     text           text NOT NULL,
     metadata       jsonb NOT NULL
 );
@@ -504,7 +510,7 @@ CREATE INDEX idx_embeddings_ivfflat ON document_embeddings
 POST   /api/v1/{domainId}/ingest                     Upload documents
 POST   /api/v1/{domainId}/ingest/folder               Batch ingest from folder
 POST   /api/v1/{domainId}/ingest/stream               Upload with SSE progress
-POST   /api/v1/{domainId}/query                       Query with optional filters
+POST   /api/v1/{domainId}/query                       Query with optional filters (optional `language`: en, es)
 GET    /api/v1/{domainId}/doc-types                    List supported doc_types (from YAML)
 GET    /api/v1/domains                                 List registered domains (from YAML)
 GET    /api/v1/{domainId}/stats                        Domain-level metrics
@@ -638,41 +644,43 @@ app:
 
   models:
     default-model: "gpt-4o-mini"
-    embedding: "text-embedding-3-small"
+    embedding: "openai/text-embedding-3-small"
     definitions:
       gpt-4o-mini:
-        provider: openai
-        api-key: ${OPENAI_API_KEY}
-        model-name: gpt-4o-mini
+        provider: openrouter
+        api-key: ${OPENROUTER_API_KEY}
+        base-url: https://openrouter.ai/api/v1
+        model-name: openai/gpt-4o-mini
         temperature: 0.1
         max-tokens: 2048
         timeout-seconds: 30
       gpt-4o:
-        provider: openai
-        api-key: ${OPENAI_API_KEY}
-        model-name: gpt-4o
+        provider: openrouter
+        api-key: ${OPENROUTER_API_KEY}
+        base-url: https://openrouter.ai/api/v1
+        model-name: openai/gpt-4o
         temperature: 0.1
         max-tokens: 4096
         timeout-seconds: 60
 ```
 
-Use **production** config above for benchmark-grade quality. For **development**, use profile `dev` and free/low-cost models (in-process embeddings, OpenRouter free): [model-recommendations.md](./model-recommendations.md).
+**All models via OpenRouter:** No direct OpenAI (or other provider) clients; use `OPENROUTER_API_KEY` only. Use **production** config above for benchmark-grade quality. For **development**, use profile `dev` and free/low-cost models (in-process embeddings, OpenRouter free): [model-recommendations.md](./model-recommendations.md).
 
 **Full model registry code:** [framework-code.md § Model Registry](./framework-code.md#2-model-registry-config)
 
 ### 14.1 General stop words — non-hardcoded options
 
-Query-term extraction uses **general** (language-level) stop words plus **domain** stop words from each domain YAML. Avoid hardcoding the general list; use one of these:
+Query-term extraction uses **general** (language-level) stop words plus **domain** stop words from each domain YAML. The platform supports **English (en)** and **Spanish (es)**; stop words should be **language-aware** so the correct set is used per request (see [§ 22 Supported languages](#22-supported-languages-english-and-spanish)). Avoid hardcoding the general list; use one of these:
 
 | Approach | Description | Pros | Cons |
 |----------|-------------|------|------|
 | **Application YAML** | `app.query.general-stop-words: ["the", "and", ...]` or `general-stop-words-file: classpath:stopwords/en.txt` | No code change to add words; env-specific overrides | List in YAML can get long |
-| **Resource file** | One word per line in `src/main/resources/stopwords/general-en.txt`; load at startup via `@Value` or a `StopWordsProvider` bean | Version with code; easy to swap files (e.g. per locale) | Requires file in classpath |
-| **Apache Lucene** | Use `EnglishAnalyzer.getDefaultStopSet()` or `StopFilter.getStopWords()` from `org.apache.lucene:lucene-analyzers-common` | Maintained, language-specific analyzers (en, es, fr, …) | Extra dependency; returns `CharArraySet` (convert to `Set<String>`) |
+| **Resource file (per locale)** | One word per line in `stopwords/general-en.txt`, `stopwords/general-es.txt`; use `general-stop-words-file` and optional `general-stop-words-file-es` (or a provider that resolves by request language) | Version with code; correct set per language (en, es) | Requires files in classpath |
+| **Apache Lucene** | Use `EnglishAnalyzer.getDefaultStopSet()` or `SpanishAnalyzer` (en, es); `StopFilter.getStopWords()` from `org.apache.lucene:lucene-analyzers-common` | Maintained, language-specific analyzers (en, es, fr, …) | Extra dependency; returns `CharArraySet` (convert to `Set<String>`) |
 | **Apache OpenNLP** | Use stop word lists from `opennlp-tools` (e.g. tokenize + stop list) | NLP pipeline already in use elsewhere | Heavier; less “just stop words” focused |
 | **Smile NLP** | `smile-nlp` has stop word sets for multiple languages | Pure Java, no native deps | Lesser-known dependency |
 
-**Recommended:** Application YAML for a short list or a **resource file** for a long one (e.g. `general-stop-words-file: classpath:stopwords/en.txt`). Use **Lucene** if you already use it for search or want many languages without maintaining lists.
+**Recommended:** Per-locale resource files for **en** and **es** (e.g. `general-stop-words-file: classpath:stopwords/general-en.txt`, `general-stop-words-file-es: classpath:stopwords/general-es.txt`) so the correct set is used from the query request language. Use **Lucene** if you already use it for search or want many languages without maintaining lists.
 
 Example in `application.yml`:
 
@@ -684,9 +692,13 @@ app:
                          "who", "what", "how", "why", "can", "you", "their", "they", "them"]
     # optional override: load from classpath or file instead of listing above
     general-stop-words-file: ${GENERAL_STOP_WORDS_FILE:}
+    # optional: Spanish (es) — used when request language is "es"; supports en + es
+    general-stop-words-file-es: classpath:stopwords/general-es.txt
+    supported-languages: [en, es]
+    default-locale: en
 ```
 
-If `general-stop-words-file` is set, it takes precedence (one word per line). Domain `stop-words` in each domain YAML are merged on top of this general set.
+If `general-stop-words-file` is set, it takes precedence (one word per line). For **multi-language support (en, es)**, set `general-stop-words-file-es` and use a stop-words provider that resolves by request language; see [§ 22](#22-supported-languages-english-and-spanish). Domain `stop-words` in each domain YAML are merged on top of this general set.
 
 Ingestion and query settings are documented in:
 - [ingestion-pipeline.md § Configuration Reference](./ingestion-pipeline.md#16-configuration-reference)
@@ -725,7 +737,7 @@ implementation 'dev.langchain4j:langchain4j-document-parser-apache-tika'
 // Optional: OCR for scanned PDFs and image documents (e.g. certificates as PNG/JPEG)
 // Tesseract: use tess4j (JNA wrapper) or run Tesseract CLI; requires Tesseract installed
 implementation 'net.sourceforge.tess4j:tess4j:5.13.0'   // or current; optional
-// Alternative: vision API (e.g. OpenAI GPT-4 Vision) for image → text; use existing ChatModel with image input
+// Alternative: vision API (e.g. GPT-4 Vision via OpenRouter) for image → text; use existing ChatModel with image input
 ```
 
 See [§ 20 OCR and image document support](#20-ocr-and-image-document-support) for when to enable OCR and how image parsing fits the pipeline.
@@ -923,7 +935,7 @@ To support embedded images:
 | Option | Description |
 |--------|-------------|
 | **OCR on embedded images** | Use PDFBox to enumerate embedded images; run OCR (Tesseract or vision API) on each; append resulting text to the page text. Configurable per domain or globally (e.g. `app.ingest.pdf.extract-embedded-image-text: true`). |
-| **Vision API** | Send each embedded image to a vision-capable LLM (e.g. GPT-4 Vision) and ask for a text description or transcribed text; append to document text. Fits the existing model-per-purpose setup (e.g. a dedicated `vision` model in `app.models.definitions`). |
+| **Vision API** | Send each embedded image to a vision-capable LLM (e.g. GPT-4 Vision via OpenRouter) and ask for a text description or transcribed text; append to document text. Fits the existing model-per-purpose setup (e.g. a dedicated `vision` model in `app.models.definitions`); all via OpenRouter. |
 
 Implementation stays behind the same `DocumentParser` interface: `PdfDocumentParser` (or a dedicated `PdfWithOcrDocumentParser`) returns the combined text. No change to the rest of the pipeline.
 
@@ -1005,3 +1017,32 @@ Use **regex**, **keyword**, or **composite (regex/keyword first)** so the LLM is
 | Answer generation | LLM | Very constrained templates only |
 
 Design supports this split: **regex**, **keyword**, and **composite** strategies keep high quality for structured metadata and avoid LLM cost where it is not needed; **llm** and **llm-block** are used only where semantic understanding or generation is required.
+
+---
+
+## 22. Supported languages (English and Spanish)
+
+The platform supports **multiple languages** so that queries, term extraction, and answers can be used in the user’s language. Initially **English (en)** and **Spanish (es)** are supported; the design is extensible to more languages later.
+
+### 22.1 Supported locales
+
+| Locale | Language | Notes |
+|--------|----------|--------|
+| **en** | English | Default; used when no language is specified |
+| **es** | Spanish | Full support for stop words, optional prompt localization, answer language |
+
+Configuration (e.g. `app.query.supported-languages: [en, es]`, `app.query.default-locale: en`) defines which locales are active. Query requests can pass a **language** (or **locale**) so that term extraction and answer generation use the appropriate language.
+
+### 22.2 Where language applies
+
+| Area | Behavior |
+|------|----------|
+| **General stop words** | Language-specific: load per locale (e.g. `general-stop-words-file-en`, `general-stop-words-file-es`) or one default file. Prevents common words in English or Spanish from being over-weighted in query-term extraction. See [§ 14.1 General stop words](#141-general-stop-words--non-hardcoded-options). |
+| **Query request** | Optional `language` (e.g. `"en"`, `"es"`) in the request body or `Accept-Language` header. Used to select stop words and to hint answer language to the LLM prompt. |
+| **Prompts** | Domain YAML can define prompt templates per language (e.g. `prompts.query.en`, `prompts.query.es`) so the answer is generated in the requested language; if missing, a single `prompts.query` is used. |
+| **Embeddings** | Production embedding models (e.g. via OpenRouter) are typically multilingual; the same vector store supports documents and queries in English and Spanish without separate indexes. |
+| **Domain stop words** | Domain-level `stop-words` in YAML can be language-specific (e.g. per-doc_type or a single list); for multi-language domains, consider separate lists keyed by locale in config. |
+
+### 22.3 Extensibility
+
+Adding a new language (e.g. French `fr`) later: (1) add locale to `app.query.supported-languages`; (2) add `general-stop-words-file-fr` (or equivalent); (3) add prompt templates for that locale in domain YAML if needed; (4) no change to core engine interfaces.

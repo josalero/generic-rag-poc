@@ -8,7 +8,7 @@
 ## 1. Getting Started
 
 To create a new domain for the RAG platform, create a YAML file in the `domains/` directory.
-The engine loads all `*.yml` files from this directory at startup.
+The engine loads all `*.yml` files from this directory at startup. The platform supports **English (en)** and **Spanish (es)** for queries and answers; see [§ 6.1 Supported languages](#61-supported-languages-english-and-spanish) and [technical-design.md § 22](./technical-design.md#22-supported-languages-english-and-spanish).
 
 ### Minimum viable domain
 
@@ -331,6 +331,15 @@ Used when the LLM is unavailable. Must contain one `%d` placeholder:
     LLM summarization was unavailable.
 ```
 
+### 6.1 Supported languages (English and Spanish)
+
+The platform supports **English (en)** and **Spanish (es)**. You can:
+
+- **Single prompt:** Use one `query` and one `fallback`; the LLM can still answer in the user’s language if the request includes `language: "es"` (or `Accept-Language`) and the prompt instructs the model to respond in that language.
+- **Localized prompts:** Optionally define prompts per locale so instructions and phrasing are in the right language (e.g. `query.en`, `query.es`, `fallback.en`, `fallback.es`). The engine selects the template that matches the query request language; if missing, it falls back to `query` / `fallback`.
+
+General stop words for term extraction are language-aware (see [technical-design.md § 14.1 and § 22](./technical-design.md#141-general-stop-words--non-hardcoded-options)); configure `general-stop-words-file` and `general-stop-words-file-es` in application config.
+
 ---
 
 ## 7. Model Configuration
@@ -380,7 +389,7 @@ Individual metadata fields can override the domain default:
 
 The design supports **market benchmark** models for production and **free / low-cost** for development. See [model-recommendations.md](./model-recommendations.md).
 
-**Production (benchmark-grade):** Define in `application.yml` or `application-prod.yml`: `gpt-4o-mini`, `gpt-4o`, optional `claude-sonnet`. Domain YAML: `models.extraction: "gpt-4o-mini"`, `models.query: "gpt-4o"` (or use neutral aliases like `extraction` / `query` and resolve per profile). Embedding: OpenAI `text-embedding-3-small`; PGVector `vector(1536)`.
+**Production (benchmark-grade):** All model API access is **via OpenRouter**; use `OPENROUTER_API_KEY` only. Define in `application.yml` or `application-prod.yml`: `gpt-4o-mini`, `gpt-4o`, optional `claude-sonnet` (each with `provider: openrouter`, `base-url`, `model-name` e.g. `openai/gpt-4o-mini`). Domain YAML: `models.extraction: "gpt-4o-mini"`, `models.query: "gpt-4o"` (or use neutral aliases like `extraction` / `query` and resolve per profile). Embedding: via OpenRouter (e.g. `openai/text-embedding-3-small`); PGVector `vector(1536)`.
 
 **Development (free / low-cost):** Use profile `dev` and `application-dev.yml` with `extraction-free`, `query-free` (OpenRouter free), `embedding: "in-process"`. Domain YAML can use the same aliases if prod/dev define them; or use `extraction-free` / `query-free` in dev. Embedding: LangChain4j in-process ONNX (384 dims); PGVector `vector(384)` in a separate DB/schema.
 

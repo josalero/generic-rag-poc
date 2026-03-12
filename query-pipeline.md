@@ -8,7 +8,7 @@
 
 The query pipeline receives a natural-language question scoped to a domain,
 retrieves relevant segments from the vector store, re-ranks them with hybrid scoring,
-generates an LLM-powered answer, and returns structured results.
+generates an LLM-powered answer, and returns structured results. The platform supports **English (en)** and **Spanish (es)**; an optional `language` (or `Accept-Language`) is used for stop-word selection and answer language (see [technical-design.md § 22 Supported languages](./technical-design.md#22-supported-languages-english-and-spanish)).
 
 ```mermaid
 flowchart TD
@@ -37,6 +37,7 @@ flowchart TD
 ```text
 POST /api/v1/{domainId}/query
 Content-Type: application/json
+Accept-Language: es   # optional; alternative to "language" in body
 
 {
   "question": "Find candidates with Java and Kubernetes, 5+ years experience",
@@ -44,11 +45,12 @@ Content-Type: application/json
   "maxResults": 50,
   "minScore": 0.75,
   "page": 1,
-  "pageSize": 10
+  "pageSize": 10,
+  "language": "en"
 }
 ```
 
-All parameters except `question` are optional. Defaults are read from `application.yml`.
+All parameters except `question` are optional. **Language:** optional `language` (e.g. `"en"`, `"es"`); if omitted, `Accept-Language` header or `app.query.default-locale` is used. Supported: **English (en)** and **Spanish (es)**. Used for stop-word selection and to hint answer language to the LLM. Defaults for other parameters are read from `application.yml`.
 
 ---
 
@@ -59,7 +61,8 @@ All parameters except `question` are optional. Defaults are read from `applicati
 | 1.1 | Resolve domain | `DomainRegistry.get(domainId)` — 404 if unknown or disabled |
 | 1.2 | Validate question | Non-null, non-blank, trimmed |
 | 1.3 | Validate docTypes | If provided, each must exist in domain's `doc-types` YAML map |
-| 1.4 | Clamp parameters | `maxResults` clamped to [1, max-allowed-results]; `minScore` clamped to [0.0, 1.0]; `page` >= 1; `pageSize` clamped to [1, 100] |
+| 1.4 | Resolve language | If `language` in body or `Accept-Language` present, resolve to supported locale (`en`, `es`); otherwise use `app.query.default-locale` (default `en`). Used in Phase 3 for stop words and in Phase 7 for prompt/answer language. |
+| 1.5 | Clamp parameters | `maxResults` clamped to [1, max-allowed-results]; `minScore` clamped to [0.0, 1.0]; `page` >= 1; `pageSize` clamped to [1, 100] |
 
 ---
 

@@ -2,7 +2,9 @@
 
 > Parent: [technical-design.md](./technical-design.md)
 
-The design **supports market-benchmark models** so production can use embedding and chat models that meet quality and benchmark standards. For **development**, use **free or low-cost** options to avoid cost and stay within rate limits. Same configuration shape; switch via **profiles** or **environment** (e.g. `spring.profiles.active=dev` vs `prod`).
+**All LLM and embedding API access is via OpenRouter.** There are no direct OpenAI (or other provider) API connections. OpenAI models (e.g. GPT-4o, text-embedding-3-small) are used **through OpenRouter** (e.g. `openai/gpt-4o-mini`); use `OPENROUTER_API_KEY` only for production and development API calls.
+
+The design **supports market-benchmark models** so production can use embedding and chat models that meet quality and benchmark standards — all through OpenRouter. For **development**, use **free or low-cost** options (in-process embeddings, OpenRouter free tier). Same configuration shape; switch via **profiles** or **environment** (e.g. `spring.profiles.active=dev` vs `prod`).
 
 ---
 
@@ -10,8 +12,8 @@ The design **supports market-benchmark models** so production can use embedding 
 
 | Environment | Embedding | Chat (extraction / query) | Goal |
 |-------------|-----------|----------------------------|------|
-| **Production** | Benchmark-grade API embeddings (e.g. OpenAI) | Benchmark-grade LLMs (e.g. GPT-4o, Claude) | Quality, reliability, market benchmarks |
-| **Development** | Free in-process (LangChain4j ONNX) or low-cost API | Free / low-cost (OpenRouter free, gpt-4o-mini) | No/minimal cost, fast iteration |
+| **Production** | Benchmark-grade embeddings via OpenRouter (e.g. openai/text-embedding-3-small) | Benchmark-grade LLMs via OpenRouter (e.g. openai/gpt-4o, anthropic/claude-3.5-sonnet) | Quality, reliability, market benchmarks; single OPENROUTER_API_KEY |
+| **Development** | Free in-process (LangChain4j ONNX) or OpenRouter | Free / low-cost (OpenRouter free tier) | No/minimal cost, fast iteration; OPENROUTER_API_KEY for free tier |
 
 Use **one** embedding model and **one** set of chat model definitions per environment; domain YAML references **model aliases** (e.g. `extraction`, `query`) that resolve to the right concrete model per profile.
 
@@ -21,47 +23,50 @@ Use **one** embedding model and **one** set of chat model definitions per enviro
 
 ### 2.1 Embedding (production)
 
-Use API-based embeddings that align with public benchmarks (e.g. MTEB, retrieval benchmarks):
+Use API-based embeddings **via OpenRouter** (no direct provider APIs). OpenRouter exposes OpenAI and other embedding models:
 
-| Provider | Model | Dimensions | Notes |
-|----------|--------|-------------|--------|
-| OpenAI | `text-embedding-3-small` | 1536 | Strong retrieval, widely benchmarked |
-| OpenAI | `text-embedding-3-large` | 3072 | Higher quality, higher cost |
-| Cohere (via API) | `embed-english-v3.0` | 1024 | Alternative benchmark-grade |
+| Model (via OpenRouter) | Dimensions | Notes |
+|------------------------|-------------|--------|
+| `openai/text-embedding-3-small` | 1536 | Strong retrieval, widely benchmarked |
+| `openai/text-embedding-3-large` | 3072 | Higher quality, higher cost |
 
-PGVector: `vector(1536)` for OpenAI small, or match the chosen model. **Do not** mix dimensions across environments if you share a DB (use separate DB or schema for dev).
+PGVector: `vector(1536)` for OpenAI small, or match the chosen model. **Do not** mix dimensions across environments if you share a DB (use separate DB or schema for dev). Single `OPENROUTER_API_KEY` for all API access.
 
 ### 2.2 Chat (production)
 
-Use models that perform well on standard benchmarks (MMLU, human eval, RAG benchmarks):
+Use models that perform well on standard benchmarks — **all via OpenRouter** (no direct OpenAI or other provider clients):
 
-| Purpose | Recommended (benchmark-grade) | Alternative |
-|---------|-------------------------------|-------------|
-| **Extraction** (bulk metadata) | `gpt-4o-mini` (OpenAI) | Claude 3 Haiku, Gemini Flash — fast and accurate |
-| **Query** (answer generation) | `gpt-4o` (OpenAI) or `claude-3.5-sonnet` (OpenRouter) | Claude 3.5 Sonnet, Gemini Pro — quality and safety |
+| Purpose | Recommended (via OpenRouter) | Alternative |
+|---------|-----------------------------|-------------|
+| **Extraction** (bulk metadata) | `openai/gpt-4o-mini` | `anthropic/claude-3-haiku`, etc. |
+| **Query** (answer generation) | `openai/gpt-4o` or `anthropic/claude-3.5-sonnet` | Claude 3.5 Sonnet, Gemini Pro — quality and safety |
 | **Guardrails** (llm-block) | Same as query or a dedicated safety model | Per-domain |
 
-Define these in `app.models.definitions` under a **production** profile or as the default when not in `dev`.
+Define these in `app.models.definitions` with `provider: openrouter`, `base-url: https://openrouter.ai/api/v1`, and `api-key: ${OPENROUTER_API_KEY}`. Model names use OpenRouter’s format (e.g. `openai/gpt-4o-mini`).
 
 ### 2.3 Example production config (application.yml or application-prod.yml)
+
+**All models via OpenRouter** — no direct OpenAI or other provider APIs. Use `OPENROUTER_API_KEY` only.
 
 ```yaml
 app:
   models:
     default-model: "gpt-4o-mini"
-    embedding: "text-embedding-3-small"
+    embedding: "openai/text-embedding-3-small"
     definitions:
       gpt-4o-mini:
-        provider: openai
-        api-key: ${OPENAI_API_KEY}
-        model-name: gpt-4o-mini
+        provider: openrouter
+        api-key: ${OPENROUTER_API_KEY}
+        base-url: https://openrouter.ai/api/v1
+        model-name: openai/gpt-4o-mini
         temperature: 0.1
         max-tokens: 2048
         timeout-seconds: 30
       gpt-4o:
-        provider: openai
-        api-key: ${OPENAI_API_KEY}
-        model-name: gpt-4o
+        provider: openrouter
+        api-key: ${OPENROUTER_API_KEY}
+        base-url: https://openrouter.ai/api/v1
+        model-name: openai/gpt-4o
         temperature: 0.1
         max-tokens: 4096
         timeout-seconds: 60
@@ -75,7 +80,7 @@ app:
         timeout-seconds: 60
 ```
 
-Domain YAML then uses aliases like `models.extraction: "gpt-4o-mini"`, `models.query: "gpt-4o"` (or `claude-sonnet`). These are the **proper** models for production and benchmarks.
+Domain YAML then uses aliases like `models.extraction: "gpt-4o-mini"`, `models.query: "gpt-4o"` (or `claude-sonnet`). These resolve to OpenRouter with the corresponding `openai/` or `anthropic/` model names. **No direct OpenAI (or other) API keys.**
 
 ---
 
@@ -141,7 +146,7 @@ Be aware of these limits when using **development** (free/low-cost) setups. They
 
 | Limitation | Detail | Mitigation |
 |------------|--------|------------|
-| **Dimension** | 384 only (vs 1536 for OpenAI small). Retrieval quality and benchmark scores are not directly comparable to production. | Use only for dev; use separate dev DB/schema so you never mix 384 with 1536. |
+| **Dimension** | 384 only (vs 1536 for production via OpenRouter). Retrieval quality and benchmark scores are not directly comparable to production. | Use only for dev; use separate dev DB/schema so you never mix 384 with 1536. |
 | **Language** | Most artifacts are English-optimized (e.g. BGE small en, All-MiniLM). Multilingual is weaker than API embeddings. | Use e5-small-v2 for better multilingual; or accept English-only for dev. |
 | **Quality** | Small models; MTEB/retrieval benchmarks will rank below production embeddings. | Expected for dev; do not report dev embedding metrics as production benchmarks. |
 | **Resource** | Runs on CPU; first load and large batch embed can be slower than API. Memory footprint for model in JVM. | Allocate enough heap; use quantized (`-q`) artifacts to reduce size. |
@@ -191,17 +196,17 @@ Recommendation: **Option A** — domain YAML references neutral aliases (`extrac
 
 | Purpose | Production (benchmark) | Development (free / low-cost) |
 |---------|------------------------|--------------------------------|
-| **Embedding** | OpenAI `text-embedding-3-small` (1536) | LangChain4j in-process BGE small / All-MiniLM (384) |
+| **Embedding** | Via OpenRouter: `openai/text-embedding-3-small` (1536) | LangChain4j in-process BGE small / All-MiniLM (384) |
 | **Extraction** | `gpt-4o-mini`, Claude Haiku | OpenRouter `openrouter/free` or `llama-3.2-3b:free` |
 | **Query** | `gpt-4o`, Claude 3.5 Sonnet | OpenRouter `openrouter/free` |
 | **Guardrails (llm)** | Same as query or dedicated | Same as query-free |
-| **PGVector dimension** | 1536 (OpenAI small) | 384 (in-process) |
+| **PGVector dimension** | 1536 (OpenRouter embedding, e.g. openai/text-embedding-3-small) | 384 (in-process) |
 
 ---
 
 ## 7. PGVector schema by environment
 
-**Production (OpenAI text-embedding-3-small):**
+**Production (via OpenRouter, e.g. openai/text-embedding-3-small):**
 
 ```sql
 embedding vector(1536)
@@ -222,7 +227,7 @@ Use separate databases or schemas for dev and prod so dimension and model choice
 | Document | Production | Development |
 |----------|------------|-------------|
 | **technical-design.md** | § 14 shows production defaults; benchmark-ready. | Dev config via profile or link here. |
-| **framework-code.md** | application-prod.yml (or default) with OpenAI + benchmark chat. | application-dev.yml with in-process + OpenRouter free. |
+| **framework-code.md** | application-prod.yml: all models via OpenRouter (openai/gpt-4o, etc.), OPENROUTER_API_KEY. | application-dev.yml with in-process + OpenRouter free. |
 | **domain-configuration-guide.md** | Recommend `extraction` / `query` aliases → benchmark models. | Same aliases → free models in dev profile. |
 | **examples/recruiting.yml**, **legal.yml** | `models.extraction: "extraction"`, `models.query: "query"` (aliases resolved per profile). | Same; profile selects concrete model. |
 
