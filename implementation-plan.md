@@ -4,6 +4,25 @@
 
 This document breaks the proposed framework into **testable iterations** with **quality gates**. Each iteration produces a shippable slice that can be verified by tests and keeps the codebase in a working state.
 
+**Iteration docs:** Each iteration has a dedicated document under [iterations/](./iterations/) that contains the **goal**, **deliverables**, **acceptance criteria**, **tests to add**, **quality gates**, and **code** for that iteration. Use the iteration doc as the single source for implementing that slice. The table below links to each.
+
+| Iteration | Document |
+|-----------|----------|
+| Quality gates (all) | [iteration-00-quality-gates.md](./iterations/iteration-00-quality-gates.md) |
+| 1 — Foundation | [iteration-01-foundation.md](./iterations/iteration-01-foundation.md) |
+| 2 — Config & model registry | [iteration-02-config-model-registry.md](./iterations/iteration-02-config-model-registry.md) |
+| 3 — Extraction strategies | [iteration-03-extraction-strategies.md](./iterations/iteration-03-extraction-strategies.md) |
+| 4 — Guardrail rules | [iteration-04-guardrail-rules.md](./iterations/iteration-04-guardrail-rules.md) |
+| 5 — Document parsers | [iteration-05-document-parsers.md](./iterations/iteration-05-document-parsers.md) |
+| 6 — Config-driven engine | [iteration-06-config-driven-engine.md](./iterations/iteration-06-config-driven-engine.md) |
+| 7 — Config-driven metadata + LLM | [iteration-07-config-driven-metadata-llm.md](./iterations/iteration-07-config-driven-metadata-llm.md) |
+| 8 — LLM guardrail | [iteration-08-llm-guardrail.md](./iterations/iteration-08-llm-guardrail.md) |
+| 9 — Ingestion service | [iteration-09-ingestion-service.md](./iterations/iteration-09-ingestion-service.md) |
+| 10 — Query service | [iteration-10-query-service.md](./iterations/iteration-10-query-service.md) |
+| 11 — REST controllers | [iteration-11-rest-controllers.md](./iterations/iteration-11-rest-controllers.md) |
+| 12 — Auto-configuration & wiring | [iteration-12-auto-configuration-wiring.md](./iterations/iteration-12-auto-configuration-wiring.md) |
+| 13 — Production hardening | [iteration-13-production-hardening.md](./iterations/iteration-13-production-hardening.md) |
+
 **Custom algorithms vs LLM:** The design prefers **custom algorithms** (regex, keyword, composite, deterministic guardrails) where they preserve quality, and uses the **LLM** only for answer generation, free-form summarization, and nuanced guardrails. When implementing extraction and guardrails, favor regex/keyword/composite first so most flows avoid LLM calls. See [technical-design.md § 21 Custom algorithms vs LLM](./technical-design.md#21-custom-algorithms-vs-llm).
 
 **Prefer configurable tools over hardcoding (guardrails excluded):** For all areas **except guardrails**, prefer configurable tools and algorithms instead of hardcoded setup: stop words from YAML or resource files (not in code); extraction strategies and patterns from domain YAML; classification rules from YAML; model definitions from `application.yml`; parser selection via registry/config; prompts from domain YAML. Guardrails remain as designed (YAML-defined rules); the preference for config/tools applies to stop words, extraction, classification, models, parsers, and prompts.
@@ -35,6 +54,8 @@ This document breaks the proposed framework into **testable iterations** with **
 ---
 
 ## 1. Quality Gates
+
+**Full detail (and single source for gates):** [iteration-00-quality-gates.md](./iterations/iteration-00-quality-gates.md).
 
 These gates apply to **every iteration** before merge. They keep the codebase buildable, tested, and maintainable.
 

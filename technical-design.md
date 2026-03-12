@@ -64,7 +64,8 @@ The platform **supports multiple languages**. Initially **English (en)** and **S
 | Document | Content |
 |---|---|
 | [framework-code.md](./framework-code.md) | Complete Java code samples — all interfaces, engine classes, model registry, strategies, services, controllers, auto-configuration |
-| [implementation-plan.md](./implementation-plan.md) | Implementation plan — quality gates, testable iterations, and mapping of all framework-code to incremental deliverables |
+| [implementation-plan.md](./implementation-plan.md) | Implementation plan — quality gates, testable iterations, index of iteration docs |
+| [iterations/](./iterations/) | One document per iteration: goal, deliverables, acceptance criteria, tests, quality gates, and code for that slice |
 | [model-recommendations.md](./model-recommendations.md) | Model suggestions — production (market benchmark) vs development (free/low-cost); profiles and aliases |
 | [ingestion-pipeline.md](./ingestion-pipeline.md) | 10-phase ingestion flow — validation, parsing, classification, extraction, splitting, embedding, storage, dedup, error handling, concurrency model |
 | [query-pipeline.md](./query-pipeline.md) | 9-phase query flow — guardrails, retrieval, hybrid re-ranking, deduplication, LLM generation, pagination, caching |

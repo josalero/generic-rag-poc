@@ -4,6 +4,8 @@
 
 All code targets **Java 25** and **Spring Boot 4.0** with **LangChain4j 1.11**.
 
+**Code by iteration:** The same code is organized **per iteration** in [iterations/](./iterations/). Each iteration doc (e.g. [iteration-01-foundation.md](./iterations/iteration-01-foundation.md)) contains the plan details (goal, deliverables, acceptance criteria, tests, quality gates) plus the code for that slice. Use the iteration docs when implementing; use this file as a single reference or when you need to see the full codebase in one place.
+
 ---
 
 ## 1. Core Abstractions (`feature/domain/`)
