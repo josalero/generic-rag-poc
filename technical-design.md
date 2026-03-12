@@ -348,53 +348,43 @@ Extension metadata keys per doc_type are defined entirely in the domain YAML.
 ## 9. Ingestion Flow
 
 ```mermaid
-flowchart TD
-    API["POST /api/v1/{domainId}/ingest\n📄 DomainIngestController"] --> SVC
+flowchart LR
+    API(["POST /api/v1/{domainId}/ingest"]) --> ACCEPT
 
-    subgraph SVC["DomainIngestionService — orchestrator, zero domain logic"]
-        direction TB
-
-        subgraph ACCEPT["🔒 ACCEPT & VALIDATE"]
-            A1["Resolve domain\nDomainRegistry.get(domainId)"]
-            A2["Validate file type\nagainst domain.supported-file-types"]
-            A3["Dedup gate\nConcurrentHashMap⟨hash, Future⟩"]
-            A1 --> A2 --> A3
-        end
-
-        subgraph PARSE["📄 PARSE & SANITIZE"]
-            B1["Select parser\nDocumentParserRegistry\nPDF → PDFBox | DOCX → POI | TXT → UTF-8"]
-            B2["Extract text\nparser.extractText(bytes)"]
-            B3["Sanitize\nnull bytes · Unicode NFC · whitespace"]
-            B1 --> B2 --> B3
-        end
-
-        subgraph ENRICH["🧠 CLASSIFY & EXTRACT — config-driven from YAML"]
-            C1["Classify doc_type\nConfigDrivenDocumentClassifier\nrules sorted by priority, first match wins"]
-            C2["Extract metadata\nConfigDrivenMetadataExtractor\nper-field: regex → llm → keyword → composite"]
-            C3["Resolve entity\ncross-doc linkage by name / hash / ID"]
-            C1 --> C2 --> C3
-        end
-
-        subgraph STORE["💾 SPLIT · EMBED · STORE"]
-            D1["Split text → segments\nDocumentSplitters.recursive\nchunk-size & chunk-overlap from YAML"]
-            D2["Embed segments → vectors\nEmbeddingModel\nbatched, virtual threads"]
-            D3["Store in PGVector\nEmbeddingStoreIngestor\nbase + extension metadata as JSONB"]
-            D1 --> D2 --> D3
-        end
-
-        subgraph AUDIT["📊 AUDIT & REPORT"]
-            E1["Emit SSE progress\nfile-ingested / file-skipped"]
-            E2["Record metrics\nprocessed · skipped · elapsed"]
-            E1 --> E2
-        end
-
-        ACCEPT --> PARSE --> ENRICH --> STORE --> AUDIT
+    subgraph ACCEPT["Accept & Validate"]
+        A1["Domain lookup · file-type check · dedup gate"]
     end
 
-    YAML[("domain YAML\nclassification-rules\ndoc-types · metadata\nchunk-size · chunk-overlap\nmodels.extraction")] -.->|configures| ENRICH
-    YAML -.->|configures| STORE
-    MODELS[("application.yml\napp.models.definitions\ngpt-4o-mini · gpt-4o · ...")] -.->|model per field| ENRICH
+    subgraph PARSE["Parse & Sanitize"]
+        B1["PDF / DOCX / TXT → raw text → clean text"]
+    end
+
+    subgraph ENRICH["Classify & Extract"]
+        C1["Assign doc_type · extract metadata per field · resolve entity"]
+    end
+
+    subgraph STORE["Split · Embed · Store"]
+        D1["Text → segments → vectors → PGVector + JSONB metadata"]
+    end
+
+    subgraph AUDIT["Audit"]
+        E1["SSE events · metrics · run summary"]
+    end
+
+    ACCEPT --> PARSE --> ENRICH --> STORE --> AUDIT
+
+    YAML[("domain YAML")] -.->|rules · fields · chunks| ENRICH
+    YAML -.->|chunk config| STORE
+    APP[("application.yml")] -.->|models · limits| ENRICH
 ```
+
+| Phase | Key class | What it does |
+|---|---|---|
+| Accept | `DomainIngestionService` | Orchestrates all phases; zero domain logic |
+| Parse | `DocumentParserRegistry` | PDFBox / POI / Tika — first parser that supports the file wins |
+| Classify | `ConfigDrivenDocumentClassifier` | Priority-sorted rules from YAML; first match wins |
+| Extract | `ConfigDrivenMetadataExtractor` | Per-field strategies: regex → llm → keyword → composite |
+| Store | `EmbeddingStoreIngestor` | LangChain4j split + embed + PGVector write |
 
 **Full 10-phase detailed design:** [ingestion-pipeline.md](./ingestion-pipeline.md)
 
@@ -407,18 +397,35 @@ SSE progress streaming, audit trail structure.
 ## 10. Query Flow
 
 ```mermaid
-flowchart TD
-    A["query(domainId, question, ?docTypes,\n?maxResults, ?minScore, ?page, ?pageSize)"] --> B["DomainQueryService\n(orchestrator — zero domain logic)"]
-    B --> S1["1. Validate\ndomain lookup, param clamping"]
-    S1 --> S2["2. Guardrails\nYAML rules, first block wins"]
-    S2 --> S3["3. Normalize\nstop words, term extraction"]
-    S3 --> S4["4. Retrieve\nvector search with metadata filters"]
-    S4 --> S5["5. Hybrid re-rank\nvector × 0.8 + keyword × 0.2"]
-    S5 --> S6["6. Deduplicate\none result per entity/source"]
-    S6 --> S7["7. Generate answer\nLLM with domain prompt template"]
-    S7 --> S8["8. Paginate\npage slicing"]
-    S8 --> S9["9. Respond\nstructured JSON + explainability"]
+flowchart LR
+    API(["POST /api/v1/{domainId}/query"]) --> VALIDATE
+
+    subgraph VALIDATE["Validate & Guard"]
+        V1["Domain lookup · guardrail rules (term / pattern / llm)"]
+    end
+
+    subgraph SEARCH["Search & Rank"]
+        S1["Normalize query · vector retrieve · hybrid re-rank · deduplicate"]
+    end
+
+    subgraph ANSWER["Generate & Respond"]
+        A1["LLM answer with prompt template · paginate · explainability JSON"]
+    end
+
+    VALIDATE --> SEARCH --> ANSWER
+
+    YAML[("domain YAML")] -.->|guardrails · prompts · stop-words| VALIDATE
+    YAML -.->|prompt template| ANSWER
+    APP[("application.yml")] -.->|models| ANSWER
 ```
+
+| Phase | Key class | What it does |
+|---|---|---|
+| Validate | `DomainQueryService` | Orchestrates all phases; zero domain logic |
+| Guard | `ConfigDrivenGuardrailEvaluator` | Evaluates term-block / pattern-block / llm-block rules |
+| Search | LangChain4j `EmbeddingStore` | Vector search filtered by domain + doc_type metadata |
+| Rank | `DomainQueryService` | Hybrid score = vector × 0.8 + keyword × 0.2; dedup by entity |
+| Answer | `ConfigDrivenPromptTemplateProvider` | Resolves prompt template; LLM generates final answer |
 
 **Full 9-phase detailed design:** [query-pipeline.md](./query-pipeline.md)
 
