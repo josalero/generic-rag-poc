@@ -1,0 +1,348 @@
+# domains/recruiting.yml
+
+domain:
+  id: recruiting
+  display-name: "Recruiting"
+  enabled: true
+
+  # ── File handling ──
+  documents-path: ${RECRUITING_DOCS_PATH:./downloaded-resumes}
+  supported-file-types: [".pdf", ".docx"]
+  chunk-size: 500
+  chunk-overlap: 100
+
+  # ── Entity linkage ──
+  entity-id-key: candidate_id    # maps to shared base metadata "entity_id"
+
+  # ── Stop words (filtered from query term extraction) ──
+  stop-words:
+    - candidate
+    - candidates
+    - resume
+    - resumes
+    - profile
+    - profiles
+
+  # ── Model selection (references app.models.definitions in application.yml) ──
+  models:
+    extraction: "gpt-4o-mini"        # cheap/fast for metadata extraction (high volume)
+    query: "gpt-4o"                  # capable model for user-facing answer generation
+
+  # ── Document classification rules ──
+  # Evaluated top-down by priority (highest first). First match wins.
+  classification-rules:
+    - doc-type: certification
+      priority: 30
+      match:
+        filename-patterns: ["*cert*", "*credential*", "*license*"]
+        content-keywords: ["certified", "credential id", "issued by", "expiration"]
+        min-keyword-hits: 2
+
+    - doc-type: course
+      priority: 25
+      match:
+        filename-patterns: ["*course*", "*training*", "*completion*"]
+        content-keywords: ["course", "completed", "certificate of completion", "hours"]
+        min-keyword-hits: 2
+
+    - doc-type: degree
+      priority: 20
+      match:
+        filename-patterns: ["*degree*", "*diploma*", "*transcript*"]
+        content-keywords: ["bachelor", "master", "phd", "university", "graduated", "gpa"]
+        min-keyword-hits: 2
+
+    - doc-type: cover_letter
+      priority: 15
+      match:
+        filename-patterns: ["*cover*", "*letter*"]
+        content-keywords: ["dear hiring", "i am writing to", "enclosed", "position of"]
+        min-keyword-hits: 2
+
+    - doc-type: job_description
+      priority: 10
+      match:
+        filename-patterns: ["*jd*", "*job*desc*", "*posting*"]
+        content-keywords: ["responsibilities", "requirements", "qualifications", "we are looking"]
+        min-keyword-hits: 2
+
+    - doc-type: resume
+      priority: 1     # lowest priority = default fallback
+      match:
+        filename-patterns: ["*.pdf", "*.docx"]
+        content-keywords: ["experience", "education", "skills"]
+        min-keyword-hits: 0    # always matches as fallback
+
+  # ── Document types and their metadata extraction rules ──
+  doc-types:
+
+    resume:
+      display-name: "Resume / CV"
+      metadata:
+        - key: candidate_name
+          type: string
+          extraction: llm
+          prompt: "Extract the full name of the candidate. Return only the name, nothing else."
+
+        - key: candidate_location
+          type: string
+          extraction: composite
+          strategies:
+            - type: regex
+              patterns:
+                - "(?:located in|based in|from)\\s+([A-Z][a-zA-Z\\s,.-]{2,40})"
+                - "(?:address|location)[:\\s]+([A-Z][a-zA-Z\\s,.-]{2,40})"
+            - type: llm
+              prompt: "Extract the candidate's city and state/country. Return only the location."
+
+        - key: candidate_top_skills
+          type: string
+          extraction: llm
+          prompt: >
+            List the top 8 technical skills from this resume, comma-separated.
+            Only include concrete technologies, languages, and frameworks.
+
+        - key: candidate_years_experience
+          type: integer
+          extraction: llm
+          prompt: "Estimate total years of professional experience. Return only a number."
+
+        - key: candidate_top_role
+          type: string
+          extraction: llm
+          prompt: >
+            What is the most fitting job title for this candidate?
+            Return a single role title like "Backend Engineer" or "Data Scientist".
+
+        - key: candidate_roles
+          type: string
+          extraction: llm
+          prompt: "List up to 6 roles this candidate could fit, comma-separated."
+
+        - key: education_level
+          type: string
+          extraction: llm
+          prompt: >
+            What is the highest education level? Return format:
+            "Degree — Field" (e.g. "Master's — Computer Science").
+
+        - key: employment_status
+          type: string
+          extraction: keyword
+          keywords:
+            open_to_work: ["open to", "seeking", "looking for", "available"]
+            employed: ["currently at", "present", "current role"]
+
+        - key: preferred_work_mode
+          type: string
+          extraction: keyword
+          keywords:
+            remote: ["remote", "work from home", "wfh"]
+            hybrid: ["hybrid"]
+            onsite: ["onsite", "on-site", "in-office"]
+
+        - key: languages_spoken
+          type: string
+          extraction: llm
+          prompt: "List human languages spoken by this candidate, comma-separated."
+
+    certification:
+      display-name: "Professional Certification"
+      metadata:
+        - key: cert_name
+          type: string
+          extraction: llm
+          prompt: "Extract the certification name. Return only the name."
+
+        - key: cert_issuer
+          type: string
+          extraction: llm
+          prompt: "Extract the organization that issued this certification."
+
+        - key: cert_issue_date
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:issued|awarded|granted|date)[:\\s]*(\\d{4}-\\d{2}-\\d{2})"
+            - "(?:issued|awarded|granted|date)[:\\s]*(\\w+ \\d{1,2},? \\d{4})"
+
+        - key: cert_expiration_date
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:expires?|expiration|valid until)[:\\s]*(\\d{4}-\\d{2}-\\d{2})"
+            - "(?:expires?|expiration|valid until)[:\\s]*(\\w+ \\d{1,2},? \\d{4})"
+
+        - key: cert_credential_id
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:credential id|certificate id|badge id|id)[:\\s]*([A-Z0-9-]{4,30})"
+
+        - key: cert_status
+          type: string
+          extraction: keyword
+          keywords:
+            active: ["active", "valid", "current"]
+            expired: ["expired", "lapsed"]
+            revoked: ["revoked", "suspended"]
+
+    course:
+      display-name: "Training / Course Completion"
+      metadata:
+        - key: course_title
+          type: string
+          extraction: llm
+          prompt: "Extract the course title. Return only the title."
+
+        - key: course_provider
+          type: string
+          extraction: llm
+          prompt: "Extract the platform or institution that offered this course."
+
+        - key: course_completion_date
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:completed|completion date|date)[:\\s]*(\\d{4}-\\d{2}-\\d{2})"
+            - "(?:completed|completion date|date)[:\\s]*(\\w+ \\d{1,2},? \\d{4})"
+
+        - key: course_skills_covered
+          type: string
+          extraction: llm
+          prompt: "List the main skills or topics covered, comma-separated."
+
+    degree:
+      display-name: "Academic Degree / Diploma"
+      metadata:
+        - key: degree_level
+          type: string
+          extraction: keyword
+          keywords:
+            PhD: ["phd", "ph.d", "doctorate", "doctoral"]
+            "Master's": ["master", "m.s.", "m.sc", "mba", "m.a."]
+            "Bachelor's": ["bachelor", "b.s.", "b.sc", "b.a.", "undergraduate"]
+            "Associate's": ["associate", "a.s.", "a.a."]
+
+        - key: degree_field
+          type: string
+          extraction: llm
+          prompt: "Extract the field of study (e.g. Computer Science). Return only the field."
+
+        - key: degree_institution
+          type: string
+          extraction: llm
+          prompt: "Extract the university or institution name. Return only the name."
+
+        - key: degree_graduation_date
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:graduated|graduation|class of|conferred)[:\\s]*(\\d{4})"
+            - "(?:graduated|graduation|class of|conferred)[:\\s]*(\\w+ \\d{4})"
+
+    cover_letter:
+      display-name: "Cover Letter"
+      metadata:
+        - key: letter_target_company
+          type: string
+          extraction: llm
+          prompt: "Which company is this cover letter addressed to? Return only the company name."
+
+        - key: letter_target_role
+          type: string
+          extraction: llm
+          prompt: "Which role is this cover letter for? Return only the job title."
+
+    job_description:
+      display-name: "Job Description / Posting"
+      metadata:
+        - key: jd_title
+          type: string
+          extraction: llm
+          prompt: "Extract the job title from this posting."
+
+        - key: jd_company
+          type: string
+          extraction: llm
+          prompt: "Extract the hiring company name."
+
+        - key: jd_required_skills
+          type: string
+          extraction: llm
+          prompt: "List the required/must-have skills, comma-separated."
+
+        - key: jd_min_years
+          type: string
+          extraction: regex
+          patterns:
+            - "(\\d{1,2})\\+?\\s*years?"
+
+  # ── Guardrails ──
+  guardrails:
+    rules:
+      - type: term-block
+        description: "Block queries that filter by protected attributes"
+        trigger-terms: [age, gender, sex, race, ethnicity, religion, disability, nationality,
+                        female, male, woman, women, man, men, pregnant, married]
+        intent-terms: [rank, filter, prefer, best, hire, select, shortlist, exclude,
+                       candidate, candidates, recruit, recruiting]
+        require-both: true
+        blocked-message: >
+          I can't rank or filter candidates by protected attributes.
+          Please ask using job-relevant skills, experience, and responsibilities.
+
+      - type: pattern-block
+        description: "Block prompt injection attempts"
+        patterns:
+          - "\\b(ignore|disregard|override|bypass)\\b.{0,80}\\b(instruction|prompt|guardrail)\\b"
+          - "\\b(jailbreak|prompt injection|dan mode)\\b"
+        blocked-message: >
+          I can't help with requests to bypass instructions. Ask about candidate
+          skills, role fit, and experience instead.
+
+      - type: pattern-block
+        description: "Block secret exfiltration"
+        patterns:
+          - "\\b(reveal|show|dump|expose)\\b.{0,120}\\b(api key|secret|password|credential|\\.env)\\b"
+        blocked-message: "I can't expose secrets or credentials."
+
+      - type: llm-block
+        description: "Detect subtle bias, coded language, or proxy discrimination"
+        model: "gpt-4o-mini"
+        prompt: |
+          You are a fairness evaluator for a recruiting search system.
+          Determine if the following query attempts to discriminate based on
+          protected attributes — even indirectly through coded language or proxies.
+
+          Examples of BLOCK:
+          - "Find young energetic candidates" (age proxy)
+          - "Candidates who would fit our culture" (bias proxy)
+          - "Candidates without career gaps" (potential discrimination)
+          - "Find candidates from top-tier universities only" (socioeconomic proxy)
+
+          Examples of PASS:
+          - "Find candidates with Java and 5+ years experience"
+          - "Candidates with AWS certifications in Denver"
+          - "Backend engineers who know Kubernetes"
+        blocked-message: >
+          This query may contain bias. Please rephrase using objective,
+          job-relevant criteria such as skills, experience, and certifications.
+
+  # ── Prompt templates ──
+  prompts:
+    query: |
+      Answer the question based only on the following resume excerpts.
+      List people or skills mentioned when relevant.
+      If the context does not contain relevant information, say so clearly.
+      Never infer or prioritize protected attributes (age, gender, race, ethnicity,
+      religion, disability, nationality, marital status).
+
+      Context:
+      %s
+
+      Question: %s
+
+    fallback: |
+      Found %d matching excerpts. Ranking is based on hybrid vector and keyword scoring.
+      LLM summarization was unavailable; this is an extractive fallback answer.

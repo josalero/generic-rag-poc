@@ -1,0 +1,351 @@
+# domains/legal.yml
+
+domain:
+  id: legal
+  display-name: "Legal"
+  enabled: true
+
+  documents-path: ${LEGAL_DOCS_PATH:./legal-documents}
+  supported-file-types: [".pdf", ".docx", ".txt"]
+  chunk-size: 1000
+  chunk-overlap: 200
+
+  entity-id-key: matter_id
+
+  stop-words: [document, documents, legal, law, the, court, case]
+
+  # ── Model selection (references app.models.definitions in application.yml) ──
+  models:
+    extraction: "gpt-4o-mini"        # cheap/fast for metadata extraction
+    query: "gpt-4o"                  # capable model for answer generation
+
+  classification-rules:
+    - doc-type: contract
+      priority: 30
+      match:
+        filename-patterns: ["*contract*", "*agreement*", "*nda*", "*msa*", "*sla*"]
+        content-keywords: ["agreement", "parties", "hereby", "whereas", "governing law",
+                           "indemnif", "termination", "effective date"]
+        min-keyword-hits: 3
+
+    - doc-type: court_filing
+      priority: 25
+      match:
+        filename-patterns: ["*motion*", "*brief*", "*complaint*", "*filing*"]
+        content-keywords: ["plaintiff", "defendant", "court", "case no", "motion",
+                           "hereby moves", "relief", "jurisdiction"]
+        min-keyword-hits: 3
+
+    - doc-type: opinion
+      priority: 20
+      match:
+        filename-patterns: ["*opinion*", "*order*", "*judgment*", "*ruling*"]
+        content-keywords: ["opinion", "ordered", "judgment", "court finds", "dismissed",
+                           "granted", "denied", "holding"]
+        min-keyword-hits: 3
+
+    - doc-type: statute
+      priority: 15
+      match:
+        filename-patterns: ["*statute*", "*regulation*", "*code*", "*usc*"]
+        content-keywords: ["section", "subsection", "enacted", "shall", "u.s.c.", "cfr"]
+        min-keyword-hits: 2
+
+    - doc-type: legal_memo
+      priority: 10
+      match:
+        filename-patterns: ["*memo*"]
+        content-keywords: ["memorandum", "to:", "from:", "re:", "analysis", "conclusion"]
+        min-keyword-hits: 3
+
+    - doc-type: regulatory_notice
+      priority: 5
+      match:
+        filename-patterns: ["*notice*", "*enforcement*", "*advisory*"]
+        content-keywords: ["notice", "enforcement", "docket", "respondent", "cease and desist"]
+        min-keyword-hits: 2
+
+  doc-types:
+
+    contract:
+      display-name: "Contract / Agreement"
+      metadata:
+        - key: contract_type
+          type: string
+          extraction: llm
+          prompt: >
+            Classify this contract. Return ONE of: NDA, MSA, SLA,
+            employment_agreement, license, lease, amendment, other.
+
+        - key: parties
+          type: string
+          extraction: llm
+          prompt: "List all contracting parties, separated by semicolons."
+
+        - key: effective_date
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:effective date|effective as of|dated)[:\\s]*(\\w+ \\d{1,2},? \\d{4})"
+            - "(?:effective date|effective as of|dated)[:\\s]*(\\d{4}-\\d{2}-\\d{2})"
+
+        - key: expiration_date
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:expir|terminat|end date|valid until)[a-z]*[:\\s]*(\\w+ \\d{1,2},? \\d{4})"
+            - "(?:expir|terminat|end date|valid until)[a-z]*[:\\s]*(\\d{4}-\\d{2}-\\d{2})"
+
+        - key: governing_law
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:governing law|governed by|laws of)[:\\s]*(?:the )?([A-Z][a-zA-Z\\s]+)"
+
+        - key: key_clauses
+          type: string
+          extraction: llm
+          prompt: >
+            List the main clause topics in this contract, comma-separated.
+            Examples: indemnification, limitation_of_liability, termination,
+            confidentiality, non-compete, IP_assignment.
+
+        - key: contract_value
+          type: string
+          extraction: regex
+          patterns:
+            - "\\$([\\d,]+(?:\\.\\d{2})?)"
+
+        - key: confidentiality_level
+          type: string
+          extraction: keyword
+          keywords:
+            privileged: ["attorney-client", "privileged", "work product"]
+            confidential: ["confidential", "not for distribution", "proprietary"]
+            public: ["public", "publicly available"]
+
+    court_filing:
+      display-name: "Court Filing"
+      metadata:
+        - key: case_number
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:case|cause|docket)\\s*(?:no\\.?|number|#)[:\\s]*([A-Z0-9-:]+)"
+            - "(\\d{1,2}:\\d{2}-[a-z]{2}-\\d{4,6})"
+
+        - key: case_title
+          type: string
+          extraction: llm
+          prompt: "Extract the case caption (e.g. Smith v. Acme Corp). Return only the caption."
+
+        - key: filing_subtype
+          type: string
+          extraction: keyword
+          keywords:
+            motion: [motion, moves, moving]
+            brief: [brief, memorandum of law]
+            complaint: [complaint, cause of action]
+            answer: [answer, affirmative defense]
+            discovery: [interrogator, request for production, deposition]
+
+        - key: jurisdiction
+          type: string
+          extraction: llm
+          prompt: "Extract the court name and jurisdiction. e.g. 'US District Court, D. Colorado'."
+
+        - key: filing_date
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:filed|filing date|date filed)[:\\s]*(\\w+ \\d{1,2},? \\d{4})"
+
+        - key: parties_plaintiff
+          type: string
+          extraction: llm
+          prompt: "Extract the plaintiff or petitioner name(s). Comma-separated."
+
+        - key: parties_defendant
+          type: string
+          extraction: llm
+          prompt: "Extract the defendant or respondent name(s). Comma-separated."
+
+        - key: practice_area
+          type: string
+          extraction: llm
+          prompt: >
+            What area of law does this filing relate to? Return ONE of:
+            employment, IP, corporate, tax, criminal, immigration, civil_rights,
+            family, real_estate, antitrust, securities, environmental, other.
+
+    opinion:
+      display-name: "Court Opinion / Order"
+      metadata:
+        - key: case_number
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:case|cause|docket)\\s*(?:no\\.?|number|#)[:\\s]*([A-Z0-9-:]+)"
+
+        - key: outcome
+          type: string
+          extraction: keyword
+          keywords:
+            granted: [granted, sustained]
+            denied: [denied, overruled]
+            dismissed: [dismissed, moot]
+            settled: [settled, consent decree]
+
+        - key: judge_name
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:Hon\\.|Judge|Justice)\\s+([A-Z][a-zA-Z\\s.'-]{2,40})"
+
+        - key: holding_summary
+          type: string
+          extraction: llm
+          model: "gpt-4o"          # override: complex legal reasoning needs stronger model
+          prompt: "Summarize the court's holding in one sentence."
+
+    statute:
+      display-name: "Statute / Regulation"
+      metadata:
+        - key: statute_code
+          type: string
+          extraction: regex
+          patterns:
+            - "(\\d+\\s*U\\.?S\\.?C\\.?)"
+            - "(\\d+\\s*C\\.?F\\.?R\\.?)"
+
+        - key: statute_section
+          type: string
+          extraction: regex
+          patterns:
+            - "[§]\\s*([\\d.]+[a-z]?)"
+            - "(?:section|sec\\.)\\s*([\\d.]+[a-z]?)"
+
+        - key: jurisdiction
+          type: string
+          extraction: llm
+          prompt: "Is this Federal or a specific State? Return the jurisdiction."
+
+    legal_memo:
+      display-name: "Legal Memorandum"
+      metadata:
+        - key: memo_author
+          type: string
+          extraction: llm
+          prompt: "Who wrote this memo? Return the author name."
+
+        - key: memo_subject
+          type: string
+          extraction: llm
+          prompt: "What is the subject of this memo? Return a one-line summary."
+
+        - key: confidentiality_level
+          type: string
+          extraction: keyword
+          keywords:
+            privileged: ["attorney-client", "privileged", "work product"]
+            confidential: ["confidential", "proprietary"]
+            public: ["public"]
+
+        - key: key_conclusions
+          type: string
+          extraction: llm
+          prompt: "Summarize the key conclusions in one sentence."
+
+    regulatory_notice:
+      display-name: "Regulatory Notice"
+      metadata:
+        - key: regulatory_body
+          type: string
+          extraction: llm
+          prompt: "Which regulatory agency issued this? (e.g. SEC, FTC, OSHA)."
+
+        - key: notice_type
+          type: string
+          extraction: keyword
+          keywords:
+            enforcement: [enforcement, penalty, fine, violation]
+            advisory: [advisory, guidance, bulletin]
+            comment_letter: [comment, public comment, comment letter]
+
+        - key: action_required
+          type: string
+          extraction: llm
+          prompt: "What action is required by the recipient? Summarize in one sentence."
+
+        - key: deadline
+          type: string
+          extraction: regex
+          patterns:
+            - "(?:deadline|respond by|due by|no later than)[:\\s]*(\\w+ \\d{1,2},? \\d{4})"
+
+  guardrails:
+    rules:
+      - type: term-block
+        description: "Prevent the system from giving legal advice"
+        trigger-terms: [should i, advise, recommend, what should, best course of action]
+        intent-terms: [sue, file, settle, plead, appeal, contract, sign]
+        require-both: true
+        blocked-message: >
+          I can only summarize and cite what the documents state.
+          I cannot provide legal advice. Please consult a licensed attorney.
+
+      - type: pattern-block
+        description: "Block privilege breach requests"
+        patterns:
+          - "\\b(show|reveal|expose|leak)\\b.{0,80}\\b(privileged|attorney.client|work product)\\b"
+        blocked-message: >
+          I cannot disclose attorney-client privileged content.
+          Access to privileged documents requires authorization.
+
+      - type: pattern-block
+        description: "Block prompt injection"
+        patterns:
+          - "\\b(ignore|disregard|override|bypass)\\b.{0,80}\\b(instruction|prompt|guardrail)\\b"
+        blocked-message: "Request blocked by security guardrail."
+
+      - type: llm-block
+        description: "Detect requests for legal advice disguised as document queries"
+        model: "gpt-4o-mini"
+        prompt: |
+          You are a compliance evaluator for a legal document search system.
+          The system may only summarize and cite documents — it must NOT provide
+          legal advice, strategy recommendations, or actionable guidance.
+
+          Determine if the query is asking for legal advice, even indirectly.
+
+          Examples of BLOCK:
+          - "What is the best way to respond to this motion?"
+          - "Should we accept or reject this settlement offer?"
+          - "How can we get around this non-compete clause?"
+          - "What are the weaknesses in opposing counsel's argument?"
+
+          Examples of PASS:
+          - "What does the contract say about termination?"
+          - "Find clauses related to indemnification in the MSA"
+          - "Summarize the court's holding in case 22-cv-1234"
+          - "What statute governs data privacy in Colorado?"
+        blocked-message: >
+          This query appears to request legal advice or strategy.
+          I can only summarize and cite what the documents state.
+          Please consult a licensed attorney for legal advice.
+
+  prompts:
+    query: |
+      Answer based only on the following legal document excerpts.
+      Cite specific clauses, sections, case numbers, or statute references when possible.
+      Never provide legal advice — only summarize what the documents state.
+      If a document is marked privileged, note that in your response.
+
+      Context:
+      %s
+
+      Question: %s
+
+    fallback: |
+      Found %d matching legal excerpts. Results ranked by hybrid vector and keyword scoring.
+      LLM summarization was unavailable; this is an extractive fallback answer.

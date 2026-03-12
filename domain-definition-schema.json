@@ -1,0 +1,437 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/rag/domain-definition-schema.json",
+  "title": "RAG Domain Definition",
+  "description": "Schema for validating domain YAML files used by the Generic Multi-Domain RAG platform. Each YAML file defines one domain with its document types, metadata extraction rules, classification logic, guardrails, and prompt templates.",
+  "type": "object",
+  "required": ["domain"],
+  "additionalProperties": false,
+  "properties": {
+    "domain": {
+      "type": "object",
+      "required": ["id", "display-name", "enabled", "supported-file-types", "chunk-size", "chunk-overlap", "classification-rules", "doc-types", "guardrails", "prompts"],
+      "additionalProperties": false,
+      "properties": {
+
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{1,48}[a-z0-9]$",
+          "description": "Unique domain identifier. Lowercase, alphanumeric with hyphens/underscores. Used as the partition key in metadata and as the {domainId} path variable in the REST API."
+        },
+
+        "display-name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Human-readable domain name shown in the UI and API responses."
+        },
+
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether this domain is active. Disabled domains are not loaded into the DomainRegistry and their API endpoints return 404."
+        },
+
+        "documents-path": {
+          "type": "string",
+          "description": "Filesystem path to the folder containing documents for batch ingestion. Supports Spring-style ${ENV_VAR:default} placeholders."
+        },
+
+        "supported-file-types": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^\\.[a-z0-9]+$",
+            "description": "File extension including the leading dot."
+          },
+          "uniqueItems": true,
+          "description": "File extensions accepted for ingestion in this domain."
+        },
+
+        "chunk-size": {
+          "type": "integer",
+          "minimum": 50,
+          "maximum": 10000,
+          "description": "Maximum number of tokens per text segment when splitting documents."
+        },
+
+        "chunk-overlap": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "Number of overlapping tokens between consecutive segments."
+        },
+
+        "entity-id-key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$",
+          "description": "The domain-specific entity identifier key (e.g. candidate_id, matter_id, patient_id). Stored in the shared base metadata field 'entity_id'."
+        },
+
+        "stop-words": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "description": "Domain-specific words filtered out during query term extraction. These are words that appear in every document within this domain and carry no discriminating value."
+        },
+
+        "models": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "extraction": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Model ID used for LLM-based metadata extraction in this domain. References a model defined in application.yml app.models.definitions. Individual fields can override this with their own 'model' key."
+            },
+            "query": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Model ID used for LLM answer generation during queries. Typically a more capable model than the extraction model."
+            }
+          },
+          "description": "Optional model configuration per purpose. Model IDs reference entries in application.yml app.models.definitions."
+        },
+
+        "classification-rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/classification-rule" },
+          "description": "Rules evaluated top-down by priority (highest first) to classify a document's doc_type. First match wins."
+        },
+
+        "doc-types": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/doc-type-definition" },
+          "description": "Map of doc_type identifiers to their definitions. Each key must match a doc-type value referenced in classification-rules."
+        },
+
+        "guardrails": {
+          "$ref": "#/$defs/guardrails",
+          "description": "Safety rules evaluated before every query. First blocking rule wins."
+        },
+
+        "prompts": {
+          "$ref": "#/$defs/prompts",
+          "description": "Prompt templates used for LLM answer generation."
+        }
+      }
+    }
+  },
+
+  "$defs": {
+
+    "classification-rule": {
+      "type": "object",
+      "required": ["doc-type", "priority", "match"],
+      "additionalProperties": false,
+      "properties": {
+        "doc-type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$",
+          "description": "The doc_type identifier assigned when this rule matches. Must correspond to a key in the doc-types map."
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000,
+          "description": "Higher values are evaluated first. Use low priority (e.g. 1) for fallback/default rules."
+        },
+        "match": {
+          "$ref": "#/$defs/classification-match"
+        }
+      }
+    },
+
+    "classification-match": {
+      "type": "object",
+      "required": ["filename-patterns", "content-keywords", "min-keyword-hits"],
+      "additionalProperties": false,
+      "properties": {
+        "filename-patterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Glob patterns matched against the filename. A match on any pattern satisfies the filename condition."
+        },
+        "content-keywords": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Keywords searched in the document text (case-insensitive). The number of hits is compared against min-keyword-hits."
+        },
+        "min-keyword-hits": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum number of content-keywords that must appear in the text for this rule to match. Set to 0 for unconditional match (useful for fallback rules)."
+        }
+      }
+    },
+
+    "doc-type-definition": {
+      "type": "object",
+      "required": ["display-name", "metadata"],
+      "additionalProperties": false,
+      "properties": {
+        "display-name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Human-readable name for this document type."
+        },
+        "metadata": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/metadata-field" },
+          "description": "Ordered list of metadata fields to extract from documents of this type."
+        }
+      }
+    },
+
+    "metadata-field": {
+      "type": "object",
+      "required": ["key", "type", "extraction"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$",
+          "description": "Metadata key stored in the embedding segment. Must be unique within a doc_type."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "float", "boolean"],
+          "description": "Data type of the extracted value."
+        },
+        "extraction": {
+          "type": "string",
+          "enum": ["regex", "llm", "keyword", "composite"],
+          "description": "Extraction strategy used to populate this field."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional model ID override for this specific field. When set, overrides domain.models.extraction for this field only. References a model defined in application.yml app.models.definitions. Only meaningful when extraction is 'llm' or when a composite strategy includes an 'llm' sub-strategy."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "LLM prompt sent along with the document text. Required when extraction is 'llm'. The document text is appended automatically by the engine."
+        },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Regex patterns tried in order; first capture group match is returned. Required when extraction is 'regex'."
+        },
+        "keywords": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "description": "Map of category label → keyword list. Text is scanned for keywords; the first matching category is returned. Required when extraction is 'keyword'."
+        },
+        "strategies": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/composite-strategy-entry" },
+          "description": "Ordered list of sub-strategies. Tried in sequence; first non-null result wins. Required when extraction is 'composite'."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "extraction": { "const": "llm" } } },
+          "then": { "required": ["prompt"] }
+        },
+        {
+          "if": { "properties": { "extraction": { "const": "regex" } } },
+          "then": { "required": ["patterns"] }
+        },
+        {
+          "if": { "properties": { "extraction": { "const": "keyword" } } },
+          "then": { "required": ["keywords"] }
+        },
+        {
+          "if": { "properties": { "extraction": { "const": "composite" } } },
+          "then": { "required": ["strategies"] }
+        }
+      ]
+    },
+
+    "composite-strategy-entry": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["regex", "llm", "keyword"],
+          "description": "The sub-strategy type. Cannot be 'composite' (no recursive nesting)."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional model ID override for this LLM sub-strategy within a composite."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "LLM prompt. Required when type is 'llm'."
+        },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Regex patterns. Required when type is 'regex'."
+        },
+        "keywords": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "description": "Keyword map. Required when type is 'keyword'."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "llm" } } },
+          "then": { "required": ["prompt"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "regex" } } },
+          "then": { "required": ["patterns"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "keyword" } } },
+          "then": { "required": ["keywords"] }
+        }
+      ]
+    },
+
+    "guardrails": {
+      "type": "object",
+      "required": ["rules"],
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/guardrail-rule" },
+          "description": "Ordered list of guardrail rules. Evaluated in sequence; first blocking rule stops evaluation and returns its blocked-message."
+        }
+      }
+    },
+
+    "guardrail-rule": {
+      "type": "object",
+      "required": ["type", "blocked-message"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["term-block", "pattern-block", "llm-block"],
+          "description": "Guardrail rule type. 'term-block' matches trigger-terms + optional intent-terms. 'pattern-block' matches regex patterns. 'llm-block' delegates the safety decision to an LLM."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable explanation of what this rule protects against."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Model ID for llm-block rules. References a model defined in application.yml app.models.definitions. If omitted, falls back to app.models.default-model."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "System prompt for llm-block rules. Defines the safety policy the LLM should enforce. Should include few-shot examples of BLOCK and PASS decisions. Required when type is 'llm-block'."
+        },
+        "trigger-terms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Terms that trigger this rule (case-insensitive word boundary match). Required when type is 'term-block'."
+        },
+        "intent-terms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Intent terms that must also be present when require-both is true. Used with type 'term-block'."
+        },
+        "require-both": {
+          "type": "boolean",
+          "description": "If true, both a trigger-term AND an intent-term must match for the rule to block. If false, trigger-terms alone are sufficient. Default: false."
+        },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Regex patterns matched against the query text (case-insensitive). Any match triggers the block. Required when type is 'pattern-block'."
+        },
+        "blocked-message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Message returned to the user when this guardrail triggers."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "term-block" } } },
+          "then": { "required": ["trigger-terms"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "pattern-block" } } },
+          "then": { "required": ["patterns"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "llm-block" } } },
+          "then": { "required": ["prompt"] }
+        }
+      ]
+    },
+
+    "prompts": {
+      "type": "object",
+      "required": ["query", "fallback"],
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "description": "System prompt template for LLM answer generation. Must contain exactly two '%s' placeholders: first for context (retrieved segments), second for the user question."
+        },
+        "fallback": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Template used when the LLM is unavailable. Must contain one '%d' placeholder for the number of matched excerpts."
+        }
+      }
+    }
+  }
+}
