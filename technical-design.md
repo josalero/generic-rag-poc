@@ -1,5 +1,39 @@
 # Generic Multi-Domain RAG — Technical Design
 
+---
+
+## Table of Contents
+
+1. [Overview](#1-overview)
+2. [Design Principles](#2-design-principles)
+   - [2.1 Infrastructure Principles](#21-infrastructure-principles)
+   - [2.2 SOLID Mapping](#22-solid-mapping)
+3. [Architecture — Two Layers](#3-architecture--two-layers)
+4. [Domain Definition Schema (YAML)](#4-domain-definition-schema-yaml)
+   - [4.1 JSON Schema Validation](#41-json-schema-validation)
+   - [4.2 YAML Top-Level Structure](#42-yaml-top-level-structure)
+   - [4.3 Domain Examples Summary](#43-domain-examples-summary)
+5. [Model Configuration](#5-model-configuration)
+   - [5.1 Model Resolution Order](#51-model-resolution-order)
+   - [5.2 Typical Model Assignment](#52-typical-model-assignment)
+6. [Extraction Strategies](#6-extraction-strategies)
+7. [Engine Class Diagram](#7-engine-class-diagram)
+8. [Shared Base Metadata](#8-shared-base-metadata-all-domains-all-doc-types)
+9. [Ingestion Flow](#9-ingestion-flow)
+10. [Query Flow](#10-query-flow)
+11. [Embedding Store Schema](#11-embedding-store-schema)
+12. [REST API Surface](#12-rest-api-surface)
+13. [Project Structure](#13-project-structure)
+14. [Configuration](#14-configuration)
+15. [Migration Path](#15-migration-path)
+16. [Dependencies to Add](#16-dependencies-to-add)
+17. [Security Considerations](#17-security-considerations)
+18. [Extensibility Checklist](#18-extensibility-checklist)
+
+**Child Documents:** [Ingestion Pipeline](./ingestion-pipeline.md) | [Query Pipeline](./query-pipeline.md) | [Extraction Strategies](./extraction-strategies.md) | [Domain Configuration Guide](./domain-configuration-guide.md) | [Framework Code](./framework-code.md)
+
+---
+
 ## 1. Overview
 
 This document describes the architecture for a **generic, configuration-driven RAG platform**
