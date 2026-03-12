@@ -340,6 +340,105 @@ app:
         timeout-seconds: 30
 ```
 
+### 2.4 General stop words (config / resource file)
+
+Avoid hardcoding general stop words. Load them from application config or a resource file. See [technical-design.md § 14.1 General stop words](./technical-design.md#141-general-stop-words--non-hardcoded-options) for options (YAML list, resource file, Lucene, OpenNLP).
+
+**Option A — YAML list** in `application.yml`:
+
+```yaml
+app:
+  query:
+    general-stop-words:
+      - the
+      - and
+      - for
+      - with
+      - from
+      - that
+      - this
+      - have
+      - has
+      - are
+      - was
+      - were
+      - into
+      - about
+      - which
+      - when
+      - where
+      - who
+      - what
+      - how
+      - why
+      - can
+      - you
+      - their
+      - they
+      - them
+```
+
+**Option B — Resource file** (one word per line), e.g. `src/main/resources/stopwords/general-en.txt`. Use `general-stop-words-file: classpath:stopwords/general-en.txt` and load at startup.
+
+**Bean that provides the set** (inject into `DomainQueryService`):
+
+```java
+package com.example.rag.config;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+@Configuration
+public class StopWordsConfig {
+
+    @Bean
+    public Set<String> generalStopWords(
+            @Value("${app.query.general-stop-words:}") List<String> fromYaml,
+            @Value("${app.query.general-stop-words-file:}") String filePath) {
+        if (filePath != null && !filePath.isBlank()) {
+            return loadFromResource(filePath);
+        }
+        return fromYaml != null && !fromYaml.isEmpty()
+                ? Set.copyOf(fromYaml)
+                : defaultEnglishStopWords();
+    }
+
+    private static Set<String> loadFromResource(String path) {
+        path = path.startsWith("classpath:") ? path.substring("classpath:".length()) : path;
+        String resourcePath = path.startsWith("/") ? path.substring(1) : path;
+        try (InputStream in = StopWordsConfig.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (in == null) return defaultEnglishStopWords();
+            String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            Set<String> words = new HashSet<>();
+            for (String line : content.lines().toList()) {
+                String w = line.trim().toLowerCase();
+                if (!w.isBlank() && !w.startsWith("#")) words.add(w);
+            }
+            return words.isEmpty() ? defaultEnglishStopWords() : Set.copyOf(words);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to load stop words from " + path, e);
+        }
+    }
+
+    private static Set<String> defaultEnglishStopWords() {
+        return Set.of(
+                "the", "and", "for", "with", "from", "that", "this", "have", "has",
+                "are", "was", "were", "into", "about", "which", "when", "where",
+                "who", "what", "how", "why", "can", "you", "their", "they", "them");
+    }
+}
+```
+
+Use file when set; otherwise use YAML list; if both empty, fall back to default English set. `DomainQueryService` receives `Set<String> generalStopWords` via constructor injection and merges with `domain.stopWords()`.
+
 ---
 
 ## 3. Config-Driven Engine (`feature/domain.engine/`)
@@ -1576,22 +1675,20 @@ import org.springframework.stereotype.Service;
 public class DomainQueryService {
 
     private static final Logger log = LoggerFactory.getLogger(DomainQueryService.class);
-    private static final Set<String> GENERAL_STOP_WORDS = Set.of(
-            "the", "and", "for", "with", "from", "that", "this", "have", "has",
-            "are", "was", "were", "into", "about", "which", "when", "where",
-            "who", "what", "how", "why", "can", "you", "their", "they", "them"
-    );
 
     private final DomainRegistry domainRegistry;
     private final ModelRegistry modelRegistry;
     private final EmbeddingStoreContentRetriever.Builder retrieverBuilder;
+    private final Set<String> generalStopWords;
 
     public DomainQueryService(DomainRegistry domainRegistry,
                               ModelRegistry modelRegistry,
-                              EmbeddingStoreContentRetriever.Builder retrieverBuilder) {
+                              EmbeddingStoreContentRetriever.Builder retrieverBuilder,
+                              Set<String> generalStopWords) {
         this.domainRegistry = domainRegistry;
         this.modelRegistry = modelRegistry;
         this.retrieverBuilder = retrieverBuilder;
+        this.generalStopWords = generalStopWords != null ? generalStopWords : Set.of();
     }
 
     public QueryResult query(String domainId, QueryRequest request) {
@@ -1635,7 +1732,7 @@ public class DomainQueryService {
     }
 
     private List<String> extractTerms(String question, RagDomain domain) {
-        var allStopWords = new HashSet<>(GENERAL_STOP_WORDS);
+        var allStopWords = new HashSet<>(generalStopWords);
         allStopWords.addAll(domain.stopWords());
 
         return Arrays.stream(question.toLowerCase(Locale.ROOT).split("[^a-z0-9]+"))

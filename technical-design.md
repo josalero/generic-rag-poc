@@ -25,6 +25,7 @@
 12. [REST API Surface](#12-rest-api-surface)
 13. [Project Structure](#13-project-structure)
 14. [Configuration](#14-configuration)
+    - [14.1 General stop words — non-hardcoded options](#141-general-stop-words--non-hardcoded-options)
 15. [Migration Path](#15-migration-path)
 16. [Dependencies to Add](#16-dependencies-to-add)
 17. [Security Considerations](#17-security-considerations)
@@ -642,6 +643,34 @@ app:
 ```
 
 **Full model registry code:** [framework-code.md § Model Registry](./framework-code.md#2-model-registry-config)
+
+### 14.1 General stop words — non-hardcoded options
+
+Query-term extraction uses **general** (language-level) stop words plus **domain** stop words from each domain YAML. Avoid hardcoding the general list; use one of these:
+
+| Approach | Description | Pros | Cons |
+|----------|-------------|------|------|
+| **Application YAML** | `app.query.general-stop-words: ["the", "and", ...]` or `general-stop-words-file: classpath:stopwords/en.txt` | No code change to add words; env-specific overrides | List in YAML can get long |
+| **Resource file** | One word per line in `src/main/resources/stopwords/general-en.txt`; load at startup via `@Value` or a `StopWordsProvider` bean | Version with code; easy to swap files (e.g. per locale) | Requires file in classpath |
+| **Apache Lucene** | Use `EnglishAnalyzer.getDefaultStopSet()` or `StopFilter.getStopWords()` from `org.apache.lucene:lucene-analyzers-common` | Maintained, language-specific analyzers (en, es, fr, …) | Extra dependency; returns `CharArraySet` (convert to `Set<String>`) |
+| **Apache OpenNLP** | Use stop word lists from `opennlp-tools` (e.g. tokenize + stop list) | NLP pipeline already in use elsewhere | Heavier; less “just stop words” focused |
+| **Smile NLP** | `smile-nlp` has stop word sets for multiple languages | Pure Java, no native deps | Lesser-known dependency |
+
+**Recommended:** Application YAML for a short list or a **resource file** for a long one (e.g. `general-stop-words-file: classpath:stopwords/en.txt`). Use **Lucene** if you already use it for search or want many languages without maintaining lists.
+
+Example in `application.yml`:
+
+```yaml
+app:
+  query:
+    general-stop-words: ["the", "and", "for", "with", "from", "that", "this", "have", "has",
+                         "are", "was", "were", "into", "about", "which", "when", "where",
+                         "who", "what", "how", "why", "can", "you", "their", "they", "them"]
+    # optional override: load from classpath or file instead of listing above
+    general-stop-words-file: ${GENERAL_STOP_WORDS_FILE:}
+```
+
+If `general-stop-words-file` is set, it takes precedence (one word per line). Domain `stop-words` in each domain YAML are merged on top of this general set.
 
 Ingestion and query settings are documented in:
 - [ingestion-pipeline.md § Configuration Reference](./ingestion-pipeline.md#16-configuration-reference)
