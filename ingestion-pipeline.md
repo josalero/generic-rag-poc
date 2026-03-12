@@ -11,42 +11,42 @@ stored in PGVector, enriched with domain-specific and doc_type-specific metadata
 
 ```mermaid
 flowchart TD
-    INPUT["POST /api/v1/{domainId}/ingest\n📄 DomainIngestController"]
+    INPUT["POST /api/v1/{domainId}/ingest — DomainIngestController"]
     INPUT --> ORCH
 
     subgraph ORCH["DomainIngestionService — orchestrator, zero domain logic"]
         direction TB
 
         subgraph ACCEPT["🔒 ACCEPT & VALIDATE — phases 1–3"]
-            P1["Phase 1 · Accept\nDomainRegistry.get(domainId)\ncheck supported-file-types\nConcurrentHashMap⟨hash, Future⟩ dedup gate"]
-            P2["Phase 2 · Parse\nDocumentParserRegistry\nPDF → PDFBox  |  DOCX → POI  |  TXT → UTF-8\nfallback → Apache Tika"]
-            P3["Phase 3 · Sanitize\nnull bytes · Unicode NFC\nwhitespace · control chars"]
+            P1["Phase 1 · Accept — domain lookup, file-type check, dedup gate"]
+            P2["Phase 2 · Parse — PDFBox / POI / UTF-8, fallback Tika"]
+            P3["Phase 3 · Sanitize — null bytes, Unicode NFC, whitespace"]
             P1 --> P2 --> P3
         end
 
         subgraph ENRICH["🧠 CLASSIFY & EXTRACT — phases 4–6 (config-driven from domain YAML)"]
-            P4["Phase 4 · Classify doc_type\nConfigDrivenDocumentClassifier\nclassification-rules sorted by priority\nfilename globs + content-keywords → first match"]
-            P5["Phase 5 · Extract metadata\nConfigDrivenMetadataExtractor\nper-field strategy: regex → llm → keyword → composite\nLLM fields batched into single call\nmodel resolved: field.model → domain.models.extraction → default"]
-            P6["Phase 6 · Resolve entity\ncross-doc linkage: filename → hash → name → explicit ID\nentity-id-key from YAML (e.g. candidate_id)"]
+            P4["Phase 4 · Classify — ConfigDrivenDocumentClassifier, priority rules, first match"]
+            P5["Phase 5 · Extract — per-field regex/llm/keyword/composite, batched LLM, model resolution"]
+            P6["Phase 6 · Resolve entity — filename → hash → name → ID, entity-id-key from YAML"]
             P4 --> P5 --> P6
         end
 
         subgraph STORE["💾 SPLIT · EMBED · STORE — phases 7–9"]
-            P7["Phase 7 · Split\nDocumentSplitters.recursive(chunkSize, chunkOverlap)\nchunk-size & chunk-overlap from domain YAML\nattach full metadata to every segment"]
-            P8["Phase 8 · Embed\nEmbeddingModel.embedAll(batch)\nvirtual-thread per batch\nmax-segments-per-batch from app config"]
-            P9["Phase 9 · Store\nPGVector · EmbeddingStoreIngestor\ndelete old segments by source filename\nbase + extension metadata as JSONB"]
+            P7["Phase 7 · Split — recursive, chunk config from YAML, metadata per segment"]
+            P8["Phase 8 · Embed — EmbeddingModel.embedAll, virtual threads, batch size from config"]
+            P9["Phase 9 · Store — PGVector, delete old by source, base + extension JSONB"]
             P7 --> P8 --> P9
         end
 
         subgraph AUDIT["📊 AUDIT & REPORT — phase 10"]
-            P10["Phase 10 · Audit\nSSE progress events: file-ingested / file-skipped\nIngestAuditService run summary\nMetrics: processed · skipped · elapsed"]
+            P10["Phase 10 · Audit — SSE events, run summary, metrics"]
         end
 
         ACCEPT --> ENRICH --> STORE --> AUDIT
     end
 
-    DOMAIN_YAML[("domain YAML\n─────────────────\nclassification-rules\ndoc-types · metadata[]\nchunk-size · chunk-overlap\nsupported-file-types\nentity-id-key\nmodels.extraction")]
-    APP_YAML[("application.yml\n─────────────────\napp.ingest.*\nconcurrent-files\nllm-enrichment.max-chars\nbatch-fields · dedup gate\napp.models.definitions")]
+    DOMAIN_YAML[("domain YAML: rules, doc-types, metadata, chunk config, models")]
+    APP_YAML[("application.yml: ingest.*, models.definitions")]
 
     DOMAIN_YAML -.->|"rules & field defs"| ENRICH
     DOMAIN_YAML -.->|"chunk config"| STORE
@@ -183,24 +183,27 @@ Output: raw text string (or null if unparseable)
 ```mermaid
 flowchart TD
     START["DocumentParserRegistry.parse(filename, bytes)"] --> PDF{"PdfDocumentParser.supports()?"}
-    PDF -- "true" --> EXTRACT_PDF["extractText()"]
+    PDF -- "true" --> EXTRACT_PDF["extractText() — scanned → optional OCR"]
     PDF -- "false" --> DOCX{"DocxDocumentParser.supports()?"}
     DOCX -- "true" --> EXTRACT_DOCX["extractText()"]
-    DOCX -- "false" --> PLAIN{"PlainTextParser.supports()?"}
+    DOCX -- "false" --> IMG{"ImageDocumentParser — .png, .jpg, .jpeg?"}
+    IMG -- "true" --> EXTRACT_IMG["extractText() — OCR or vision API"]
+    IMG -- "false" --> PLAIN{"PlainTextParser.supports()?"}
     PLAIN -- "true" --> EXTRACT_PLAIN["extractText()"]
     PLAIN -- "false" --> TIKA{"TikaDocumentParser (fallback)"}
     TIKA -- "catches everything" --> EXTRACT_TIKA["extractText()"]
 ```
 
-Parsers are tried in registration order. If a specific parser is registered (PDF, DOCX),
-it takes precedence over the Tika catch-all.
+Parsers are tried in registration order. If a specific parser is registered (PDF, DOCX, image, plain),
+it takes precedence over the Tika catch-all. Image parser is optional (e.g. for certificates as images).
 
 ### Parser internals
 
 **PdfDocumentParser:**
 - Uses Apache PDFBox 3.x `Loader.loadPDF(bytes)` + `PDFTextStripper.getText(doc)`
 - Handles encrypted PDFs: if password-protected, skip with reason `"Password-protected PDF"`
-- Handles scanned PDFs: if text is empty after extraction, optionally route to OCR (Tesseract)
+- **Scanned PDFs:** if text is empty (or below a length threshold) after extraction, optionally run **OCR** (e.g. Tesseract): render each page to image via `PDFRenderer`, run OCR per page, concatenate text. Controlled by `app.ingest.ocr.enabled` (default false). See [technical-design.md § 20](./technical-design.md#20-ocr-and-image-document-support).
+- **Embedded images in PDF:** by default text-only extraction does not read text inside embedded images. Optional: extract embedded images, run OCR or a vision API on each, append to document text (configurable).
 
 **DocxDocumentParser:**
 - Uses Apache POI `XWPFDocument` + `XWPFWordExtractor.getText()`
@@ -210,6 +213,11 @@ it takes precedence over the Tika catch-all.
 **PlainTextParser:**
 - Reads bytes as UTF-8 (with fallback charset detection via BOM)
 - Supports `.txt`, `.md`, `.csv`
+
+**ImageDocumentParser (optional):**
+- Supports standalone image files: `.png`, `.jpg`, `.jpeg` (e.g. **certificates shared as images**).
+- `extractText(bytes)`: run OCR (Tesseract) or a vision-capable LLM on the image and return the extracted/described text.
+- Domains that accept certificates as images add these extensions to `supported-file-types` in YAML. Same downstream pipeline (classify → extract metadata → split → embed → store). See [technical-design.md § 20](./technical-design.md#20-ocr-and-image-document-support).
 
 ---
 

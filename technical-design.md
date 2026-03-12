@@ -31,6 +31,7 @@
 17. [Security Considerations](#17-security-considerations)
 18. [Extensibility Checklist](#18-extensibility-checklist)
 19. [Human-in-the-Loop and Feedback](#19-human-in-the-loop-and-feedback)
+20. [OCR and image document support](#20-ocr-and-image-document-support)
 
 **Child Documents:** [Ingestion Pipeline](./ingestion-pipeline.md) | [Query Pipeline](./query-pipeline.md) | [Extraction Strategies](./extraction-strategies.md) | [Domain Configuration Guide](./domain-configuration-guide.md) | [Framework Code](./framework-code.md) | [Implementation Plan](./implementation-plan.md)
 
@@ -101,9 +102,9 @@ The system has two distinct layers:
 flowchart TD
     subgraph CONFIG["CONFIGURATION LAYER"]
         direction LR
-        R["domains/recruiting.yml\n← defines domain, doc_types, extraction rules"]
-        L["domains/legal.yml\n← defines domain, doc_types, extraction rules"]
-        M["domains/medical.yml\n← defines domain, doc_types, extraction rules"]
+        R["recruiting.yml — domain, doc_types, rules"]
+        L["legal.yml — domain, doc_types, rules"]
+        M["medical.yml — domain, doc_types, rules"]
     end
 
     CONFIG -- "loaded at startup" --> DDL
@@ -331,10 +332,12 @@ classDiagram
     class PdfDocumentParser
     class DocxDocumentParser
     class PlainTextParser
+    class ImageDocumentParser
 
     DocumentParser <|.. PdfDocumentParser
     DocumentParser <|.. DocxDocumentParser
     DocumentParser <|.. PlainTextParser
+    DocumentParser <|.. ImageDocumentParser
 
     class GuardrailRule {
         <<interface>>
@@ -393,7 +396,7 @@ flowchart LR
     end
 
     subgraph PARSE["Parse & Sanitize"]
-        B1["PDF / DOCX / TXT → raw text → clean text"]
+        B1["PDF / DOCX / TXT / images → raw text (optional OCR)"]
     end
 
     subgraph ENRICH["Classify & Extract"]
@@ -418,7 +421,7 @@ flowchart LR
 | Phase | Key class | What it does |
 |---|---|---|
 | Accept | `DomainIngestionService` | Orchestrates all phases; zero domain logic |
-| Parse | `DocumentParserRegistry` | PDFBox / POI / Tika — first parser that supports the file wins |
+| Parse | `DocumentParserRegistry` | PDFBox / POI / Tika; optional OCR for scanned PDFs; optional image parser (e.g. certificates) — see [§ 20](#20-ocr-and-image-document-support) |
 | Classify | `ConfigDrivenDocumentClassifier` | Priority-sorted rules from YAML; first match wins |
 | Extract | `ConfigDrivenMetadataExtractor` | Per-field strategies: regex → llm → keyword → composite |
 | Store | `EmbeddingStoreIngestor` | LangChain4j split + embed + PGVector write |
@@ -586,7 +589,8 @@ be/
 │   │   │   │   ├── DocumentParserRegistry.java         Composite dispatcher (O)
 │   │   │   │   ├── PdfDocumentParser.java
 │   │   │   │   ├── DocxDocumentParser.java
-│   │   │   │   └── PlainTextParser.java
+│   │   │   │   ├── PlainTextParser.java
+│   │   │   │   └── ImageDocumentParser.java              Optional: OCR/vision for .png, .jpg (e.g. certificates)
 │   │   │   ├── controller/
 │   │   │   │   └── DomainIngestController.java
 │   │   │   └── service/
@@ -720,7 +724,14 @@ implementation 'org.apache.poi:poi-ooxml:5.3.0'
 
 // Optional: Tika catch-all parser (1000+ formats)
 implementation 'dev.langchain4j:langchain4j-document-parser-apache-tika'
+
+// Optional: OCR for scanned PDFs and image documents (e.g. certificates as PNG/JPEG)
+// Tesseract: use tess4j (JNA wrapper) or run Tesseract CLI; requires Tesseract installed
+implementation 'net.sourceforge.tess4j:tess4j:5.13.0'   // or current; optional
+// Alternative: vision API (e.g. OpenAI GPT-4 Vision) for image → text; use existing ChatModel with image input
 ```
+
+See [§ 20 OCR and image document support](#20-ocr-and-image-document-support) for when to enable OCR and how image parsing fits the pipeline.
 
 ---
 
@@ -780,6 +791,8 @@ See [extraction-strategies.md § Adding a Custom Strategy](./extraction-strategi
 3. Add the file extension to `supported-file-types` in any domain YAML
 4. **No changes to engine or existing parsers**
 
+For **OCR and image documents** (scanned PDFs, certificates as PNG/JPEG), see [§ 20 OCR and image document support](#20-ocr-and-image-document-support): optional `ImageDocumentParser`, optional OCR path in `PdfDocumentParser`, and Tesseract or vision API dependencies.
+
 ### Overriding config with handcoded Java (escape hatch)
 
 1. Implement `RagDomain` directly in Java (e.g. `RecruitingDomainOverride`)
@@ -824,9 +837,9 @@ flowchart LR
         I4 --> I5["POST /feedback/ingestion"]
     end
 
-    Q5 --> STORE[("Feedback store\nper domain")]
+    Q5 --> STORE[("Feedback store per domain")]
     I5 --> STORE
-    STORE -.->|"Learning loop"| LEARN["Suggest YAML changes\nExport training data\nTune reranker / prompts"]
+    STORE -.->|"Learning loop"| LEARN["Suggest YAML · export data · tune reranker"]
 ```
 
 - **Query path:** After the API returns the answer, the UI (or another system) can call `POST /api/v1/{domainId}/feedback/query` with a rating and/or the corrected answer. No change to the core query pipeline; feedback is a separate write.
@@ -886,3 +899,55 @@ app:
 ```
 
 This keeps HITL and feedback **config-driven and per-domain** without hardcoding behavior in the engine.
+
+---
+
+## 20. OCR and image document support
+
+The design **supports OCR and image-based documents** (e.g. scanned PDFs, certificates shared as PNG/JPEG) in three ways. All are **optional** and configurable so domains that only need text PDFs/DOCX are unchanged.
+
+### 20.1 Scanned PDFs (text empty after extraction)
+
+When `PdfDocumentParser` extracts no (or negligible) text from a PDF, the pipeline can treat the PDF as **scanned** and run OCR on the rendered pages:
+
+| Option | Description | Config / dependency |
+|--------|--------------|----------------------|
+| **Tesseract** | Render each page to an image (e.g. PDFBox `PDFRenderer`), run Tesseract OCR per page, concatenate text | `app.ingest.ocr.enabled: true`; Tesseract on classpath or system path; optional `app.ingest.ocr.language` (e.g. `eng`) |
+| **Skip** | Do not run OCR; skip file with reason `"No extractable text (scanned PDF)"` | Default when OCR not enabled |
+
+Flow: `PdfDocumentParser.extractText(bytes)` → if text blank or length &lt; threshold → optionally invoke OCR pipeline (render page → OCR → append); else return extracted text. See [ingestion-pipeline.md § Phase 2 — Parse](./ingestion-pipeline.md#4-phase-2--parse).
+
+### 20.2 Embedded images inside PDFs
+
+PDFs often contain **embedded images** (e.g. logos, diagrams, scanned inserts). Today the design uses PDFBox text extraction only and **does not** extract text from those images by default.
+
+To support embedded images:
+
+| Option | Description |
+|--------|-------------|
+| **OCR on embedded images** | Use PDFBox to enumerate embedded images; run OCR (Tesseract or vision API) on each; append resulting text to the page text. Configurable per domain or globally (e.g. `app.ingest.pdf.extract-embedded-image-text: true`). |
+| **Vision API** | Send each embedded image to a vision-capable LLM (e.g. GPT-4 Vision) and ask for a text description or transcribed text; append to document text. Fits the existing model-per-purpose setup (e.g. a dedicated `vision` model in `app.models.definitions`). |
+
+Implementation stays behind the same `DocumentParser` interface: `PdfDocumentParser` (or a dedicated `PdfWithOcrDocumentParser`) returns the combined text. No change to the rest of the pipeline.
+
+### 20.3 Standalone image files (e.g. certificates as PNG/JPEG)
+
+Many certificates or credentials are shared as **image-only** files (`.png`, `.jpg`, `.jpeg`). To ingest them:
+
+| Component | Description |
+|-----------|-------------|
+| **Supported file types** | Add `".png"`, `".jpg"`, `".jpeg"` to `supported-file-types` in the domain YAML (e.g. recruiting, legal) when the image parser is enabled. |
+| **ImageDocumentParser** | New `DocumentParser` implementation: `supports(filename)` for image extensions; `extractText(bytes)` runs OCR (Tesseract) or a vision API on the image and returns the extracted text. Same downstream pipeline (classify → extract metadata → split → embed → store). |
+| **Registration** | Register `ImageDocumentParser` in `DocumentParserRegistry` (e.g. after PDF/DOCX, before Tika). Domains that do not list image extensions never hit this parser. |
+
+So **certificates as images** are supported by: (1) enabling an image parser, (2) adding image extensions to the domain’s `supported-file-types`, and (3) ensuring classification rules can recognize certificate images (e.g. by filename pattern `*cert*.png` and optional content keywords on the OCR text).
+
+### 20.4 Summary
+
+| Scenario | Supported today? | How |
+|----------|------------------|-----|
+| Scanned PDF (no text layer) | Optional | PDF parser detects empty text → optional OCR (Tesseract) on rendered pages; see [ingestion-pipeline.md](./ingestion-pipeline.md#4-phase-2--parse). |
+| Embedded images in PDF | Not by default | Design extension: same PDF parser (or dedicated parser) runs OCR or vision on embedded images and appends text. |
+| Standalone images (certificates) | Design extension | New `ImageDocumentParser` (OCR or vision); add `.png`/`.jpg` to `supported-file-types` in domain YAML. |
+
+All of this uses the existing **open/closed** approach: new parser implementations and `supported-file-types` in YAML; no change to the core engine. Dependencies (e.g. Tesseract, or a vision client) are optional and documented in [§ 16 Dependencies](#16-dependencies-to-add) and [ingestion-pipeline.md](./ingestion-pipeline.md#4-phase-2--parse).

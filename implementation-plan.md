@@ -71,14 +71,14 @@ Iterations are ordered so that each builds on the previous. Parallel work is pos
 
 ```mermaid
 flowchart TD
-    I1["I1: Foundation\ninterfaces, records, registry"]
-    I2["I2: Config & model\nregistry, stop words"]
-    I3["I3: Extraction strategies\nregex, keyword, composite"]
-    I4["I4: Guardrail rules\nterm, pattern"]
-    I5["I5: Document parsers\nPDF, DOCX, TXT"]
-    I6["I6: Config-driven engine\nloader, classifier, prompts, guardrails"]
-    I7["I7: Metadata + LLM strategy\nConfigDriven extractor, LlmStrategy"]
-    I8["I8: LLM guardrail\nLlmGuardrailRule"]
+    I1["I1: Foundation — interfaces, records, registry"]
+    I2["I2: Config & model — registry, stop words"]
+    I3["I3: Extraction strategies — regex, keyword, composite"]
+    I4["I4: Guardrail rules — term, pattern"]
+    I5["I5: Document parsers — PDF, DOCX, TXT"]
+    I6["I6: Config-driven engine — loader, classifier, prompts, guardrails"]
+    I7["I7: Metadata + LLM strategy — extractor, LlmStrategy"]
+    I8["I8: LLM guardrail — LlmGuardrailRule"]
     I9["I9: Ingestion service"]
     I10["I10: Query service"]
     I11["I11: REST controllers"]
