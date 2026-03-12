@@ -11,6 +11,8 @@ Each metadata field in a domain YAML declares an `extraction` type that maps to 
 implementation. The engine resolves the strategy via `ExtractionStrategyFactory` and executes it
 against the document text.
 
+**Custom algorithms vs LLM:** Many fields can be handled with **regex** or **keyword** (or **composite** with those first) without calling an LLM, preserving quality and reducing cost. Use LLM only for free-form summarization, highly variable phrasing, or open-ended categories. See [technical-design.md § 21 Custom algorithms vs LLM](./technical-design.md#21-custom-algorithms-vs-llm).
+
 ```mermaid
 classDiagram
     class ExtractionStrategy {

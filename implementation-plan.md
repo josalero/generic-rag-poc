@@ -4,6 +4,8 @@
 
 This document breaks the proposed framework into **testable iterations** with **quality gates**. Each iteration produces a shippable slice that can be verified by tests and keeps the codebase in a working state.
 
+**Custom algorithms vs LLM:** The design prefers **custom algorithms** (regex, keyword, composite, deterministic guardrails) where they preserve quality, and uses the **LLM** only for answer generation, free-form summarization, and nuanced guardrails. When implementing extraction and guardrails, favor regex/keyword/composite first so most flows avoid LLM calls. See [technical-design.md § 21 Custom algorithms vs LLM](./technical-design.md#21-custom-algorithms-vs-llm).
+
 ---
 
 ## Table of Contents
@@ -62,6 +64,7 @@ These gates apply to **every iteration** before merge. They keep the codebase bu
 - **Integration tests** for critical paths (e.g. load YAML → classify, or ingest one file) using test profiles and in-memory or Testcontainers DB
 - **JaCoCo** coverage report; fail build below 80% on new code
 - **Conventional commits** for each commit (`feat:`, `fix:`, `test:`, `chore:`)
+- **Domain YAML authoring:** Prefer regex/keyword/composite for structured metadata; use LLM only where § 21 indicates (summaries, variable phrasing, nuanced guardrails)
 
 ---
 
@@ -182,7 +185,7 @@ flowchart TD
 
 ## 5. Iteration 3 — Extraction strategies (no LLM)
 
-**Goal:** Implement regex, keyword, and composite extraction strategies and the factory. Composite may chain regex + keyword only (LLM sub-strategy in Iteration 7).
+**Goal:** Implement regex, keyword, and composite extraction strategies and the factory. Composite may chain regex + keyword only (LLM sub-strategy in Iteration 7). These **custom algorithms** cover most structured metadata (dates, IDs, categories) without LLM; see [technical-design.md § 21](./technical-design.md#21-custom-algorithms-vs-llm).
 
 ### 5.1 Deliverables (framework-code.md)
 
@@ -209,11 +212,13 @@ flowchart TD
 
 - `./gradlew test`; no network; tests are deterministic.
 
+**Design note:** When authoring domain YAML, prefer regex/keyword (or composite with these first) for structured fields so ingestion stays high-quality and low-cost; use LLM only for summaries or highly variable fields (§ 21).
+
 ---
 
 ## 6. Iteration 4 — Guardrail rules (deterministic)
 
-**Goal:** Implement term-block and pattern-block guardrail rules and the guardrail rule factory. No LLM.
+**Goal:** Implement term-block and pattern-block guardrail rules and the guardrail rule factory. No LLM. These **custom algorithms** handle most guardrail needs (blocklist terms, prompt-injection patterns); llm-block is added in Iteration 8 for nuanced intent. See [technical-design.md § 21](./technical-design.md#21-custom-algorithms-vs-llm).
 
 ### 6.1 Deliverables (framework-code.md)
 
@@ -276,7 +281,7 @@ flowchart TD
 
 ## 8. Iteration 6 — Config-driven engine (YAML loader + classifier, prompts, guardrails)
 
-**Goal:** Load domain YAML from a path, build a `ConfigDrivenRagDomain` with classifier, prompt provider, and guardrail evaluator. No metadata extraction yet (no LLM, no extractors).
+**Goal:** Load domain YAML from a path, build a `ConfigDrivenRagDomain` with classifier, prompt provider, and guardrail evaluator. No metadata extraction yet (no LLM, no extractors). Classifier and deterministic guardrails are **custom-algorithm** steps per § 21 (no LLM required for quality).
 
 ### 8.1 Deliverables (framework-code.md)
 
@@ -309,7 +314,7 @@ flowchart TD
 
 ## 9. Iteration 7 — Config-driven metadata + LLM strategy
 
-**Goal:** Add metadata extraction to the config-driven engine: load field definitions from YAML, run regex/keyword/composite/LLM strategies. Wire `LlmExtractionStrategy` with a `ChatModel` (mock in tests).
+**Goal:** Add metadata extraction to the config-driven engine: load field definitions from YAML, run regex/keyword/composite/LLM strategies. Wire `LlmExtractionStrategy` with a `ChatModel` (mock in tests). **Composite must try regex/keyword before LLM** so custom algorithms handle structured fields first; LLM is fallback for free-form or variable content (see [technical-design.md § 21](./technical-design.md#21-custom-algorithms-vs-llm)).
 
 ### 9.1 Deliverables (framework-code.md)
 
@@ -325,6 +330,7 @@ flowchart TD
 
 - For a doc_type, extractor iterates fields; each field’s strategy (regex, llm, keyword, composite) is created by factory; LLM strategy uses `ModelRegistry` (or injected `ChatModel` in tests).
 - Model resolution: field override → domain extraction model → default.
+- **Composite tries strategies in order** (e.g. regex then keyword then llm); first non-null result wins — so custom algorithms run before LLM (§ 21).
 - Composite can include LLM as sub-step; factory passes model resolver where needed.
 
 ### 9.3 Tests to add
@@ -552,4 +558,4 @@ These can be scheduled after the core 13 iterations.
 | 13 | Exception handling, validation, health | Unit + controller |
 | Optional | Override, feedback, reload, SSE | Per feature |
 
-Quality gates (build, tests, coverage, lint, no PII, meaningful assertions) apply to every iteration. Each iteration links to [framework-code.md](./framework-code.md) for the exact code to implement.
+Quality gates (build, tests, coverage, lint, no PII, meaningful assertions) apply to every iteration. Each iteration links to [framework-code.md](./framework-code.md) for the exact code to implement. When authoring domain YAML or adding extraction/guardrail logic, prefer **custom algorithms** (regex, keyword, composite, term/pattern guardrails) first; use LLM only where needed for quality — see [technical-design.md § 21](./technical-design.md#21-custom-algorithms-vs-llm).

@@ -32,6 +32,7 @@
 18. [Extensibility Checklist](#18-extensibility-checklist)
 19. [Human-in-the-Loop and Feedback](#19-human-in-the-loop-and-feedback)
 20. [OCR and image document support](#20-ocr-and-image-document-support)
+21. [Custom algorithms vs LLM](#21-custom-algorithms-vs-llm)
 
 **Child Documents:** [Ingestion Pipeline](./ingestion-pipeline.md) | [Query Pipeline](./query-pipeline.md) | [Extraction Strategies](./extraction-strategies.md) | [Domain Configuration Guide](./domain-configuration-guide.md) | [Framework Code](./framework-code.md) | [Implementation Plan](./implementation-plan.md) | [Model Recommendations](./model-recommendations.md)
 
@@ -947,3 +948,60 @@ So **certificates as images** are supported by: (1) enabling an image parser, (2
 | Standalone images (certificates) | Design extension | New `ImageDocumentParser` (OCR or vision); add `.png`/`.jpg` to `supported-file-types` in domain YAML. |
 
 All of this uses the existing **open/closed** approach: new parser implementations and `supported-file-types` in YAML; no change to the core engine. Dependencies (e.g. Tesseract, or a vision client) are optional and documented in [§ 16 Dependencies](#16-dependencies-to-add) and [ingestion-pipeline.md](./ingestion-pipeline.md#4-phase-2--parse).
+
+---
+
+## 21. Custom algorithms vs LLM
+
+Many pipeline steps can be done with **custom algorithms** (regex, keywords, rules, classical NLP) **instead of calling an LLM**, without losing quality. Using deterministic or light-weight logic where possible reduces cost, latency, and variability and keeps quality high when the task is well-defined.
+
+### 21.1 Already custom (no LLM) — high quality preserved
+
+These steps use no LLM by design; they are deterministic or use embeddings/vector math only.
+
+| Process | What runs | Why quality is preserved |
+|---------|------------|---------------------------|
+| **Document classification** | Filename patterns (glob) + content keyword counts + priority rules | Doc types are defined by stable signals (e.g. "certified", "credential id" for certifications). First-match priority gives predictable, auditable results. |
+| **Query normalization** | Tokenization, stop-word removal, term extraction | Improves retrieval consistency; no semantic nuance needed. |
+| **Retrieval** | Vector similarity + metadata filters (domain, doc_type) | Embedding model already encodes semantics; search is similarity math. |
+| **Hybrid scoring** | Vector score × 0.8 + keyword-overlap score × 0.2 | Simple, interpretable; no LLM needed. |
+| **Deduplication** | By entity_id or source filename | Pure logic. |
+| **Sanitization** | Null-byte removal, Unicode NFC, whitespace normalization | Standard text normalization. |
+| **Guardrails (term-block, pattern-block)** | Blocklist terms and regex patterns | Catches known bad queries and prompt-injection shapes; fast and deterministic. |
+
+### 21.2 Prefer custom algorithms (avoid LLM) when possible
+
+Use **regex**, **keyword**, or **composite (regex/keyword first)** so the LLM is only a fallback. Quality stays high when the field is structured or has a fixed vocabulary.
+
+| Process | Custom approach | Use LLM only when |
+|---------|------------------|--------------------|
+| **Metadata extraction — dates** | Regex (e.g. ISO dates, “issued: YYYY-MM-DD”) | Formats are highly variable or in free text with no pattern. |
+| **Metadata extraction — IDs** | Regex (credential id, case number, contract id) | ID format is not standardizable. |
+| **Metadata extraction — categories** | Keyword strategy (map phrases to a fixed set, e.g. employment_status → open_to_work | employed) | Categories are open-ended or need inference. |
+| **Metadata extraction — amounts / numbers** | Regex or small parser | Value is in narrative form (“approximately ten thousand”). |
+| **Metadata extraction — parties, names** | Regex for “Party A: …” style; NER if you add a NER strategy | Names appear in unpredictable phrasing. |
+| **Guardrails** | term-block + pattern-block for clear violations | You need to detect *intent* or disguised requests (e.g. “answer as if you were my lawyer”); then llm-block can add value. |
+
+**Composite strategy:** Define fields with `extraction: composite` and put **regex** or **keyword** first; add **llm** only as fallback. That way most documents are handled without an LLM call, and quality for structured content is often better (no hallucination, consistent format).
+
+### 21.3 Where LLM is hard to replace without losing quality
+
+| Process | Why LLM is typically needed |
+|---------|-----------------------------|
+| **Answer generation** | Synthesizing a natural-language answer from multiple retrieved chunks is a generation task. Template-based or pure extractive answers can work for very constrained UIs but usually feel lower quality for open-ended questions. |
+| **Free-form summarization** | e.g. “Summarize the court’s holding in one sentence”, “List the top 5 skills” when the document does not have a fixed structure. Custom logic cannot reliably produce a single fluent sentence from arbitrary text. |
+| **Nuanced guardrails** | e.g. detecting subtle bias, disguised legal/medical advice, or policy edge cases. Rule-based checks are insufficient; llm-block (or a dedicated classifier) is used for intent/semantics. |
+| **Highly variable extraction** | When the same field appears in many unrelated phrasings and no stable regex or keyword set exists, LLM extraction can still be the most robust option. |
+
+### 21.4 Summary
+
+| Pipeline step | Prefer | LLM only when |
+|---------------|--------|----------------|
+| Classification | Custom (patterns + keywords) | — (already custom) |
+| Extraction — structured fields | Regex, keyword, composite | Free-form or highly variable |
+| Extraction — summaries / open-ended | LLM or composite with LLM fallback | — |
+| Guardrails | term-block, pattern-block | Nuanced intent / disguised requests |
+| Retrieval, scoring, dedup | Custom (vectors, keywords, rules) | — |
+| Answer generation | LLM | Very constrained templates only |
+
+Design supports this split: **regex**, **keyword**, and **composite** strategies keep high quality for structured metadata and avoid LLM cost where it is not needed; **llm** and **llm-block** are used only where semantic understanding or generation is required.

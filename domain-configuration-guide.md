@@ -140,7 +140,7 @@ A rule matches when:
 
 ## 4. Metadata Fields
 
-Each doc_type declares a list of metadata fields to extract.
+Each doc_type declares a list of metadata fields to extract. Prefer **regex** or **keyword** (or **composite** with those first) for structured fields (dates, IDs, enums) to avoid LLM calls and keep quality high; use **llm** for summaries or when the format is too variable. See [technical-design.md § 21 Custom algorithms vs LLM](./technical-design.md#21-custom-algorithms-vs-llm).
 
 ### Field anatomy
 
