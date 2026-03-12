@@ -602,9 +602,10 @@ Output: audit trail + SSE progress events + metrics
 | # | Step | Detail |
 |---|---|---|
 | 10.1 | Record file event | `IngestAuditService.addFileEvent(filename, status, reason)` |
-| 10.2 | Emit SSE event | `IngestProgressEvent.fileIngested(filename)` or `fileSkipped(filename, reason)` |
-| 10.3 | Update metrics | `ObservabilityService.recordIngestRun(processed, skipped)` |
-| 10.4 | Save run summary | `IngestAuditService.saveRun(runHandle, processed, skipped)` |
+| 10.2 | Write ledger entry | If ledger enabled: `IngestionLedgerService.record(domainId, source, status, reason, docType, suggestedDocType, nextSteps)` — see § 17 |
+| 10.3 | Emit SSE event | `IngestProgressEvent.fileIngested(filename)` or `fileSkipped(filename, reason)` |
+| 10.4 | Update metrics | `ObservabilityService.recordIngestRun(processed, skipped)` |
+| 10.5 | Save run summary | `IngestAuditService.saveRun(runHandle, processed, skipped)` |
 
 ### Audit record structure
 
@@ -837,3 +838,48 @@ domain:
 ```
 
 **Embedding and LLM models:** All API access is **via OpenRouter**. Production = benchmark-grade (e.g. openai/gpt-4o-mini, openai/text-embedding-3-small); development = free/low-cost (in-process embeddings, OpenRouter free). See [model-recommendations.md](./model-recommendations.md). Extraction model is set per domain in `models.extraction`.
+
+---
+
+## 17. Ingestion ledger and classification-help
+
+See [technical-design.md § 23](./technical-design.md#23-ingestion-ledger-and-classification-help-flow) for the product design. This section describes how the pipeline integrates with the ledger and the preflight (classify-only) flow.
+
+### 17.1 Ingestion ledger — where records are written
+
+When `app.ingestion.ledger.enabled` is true, the orchestrator writes a **ledger entry** for every file it processes:
+
+| Phase / outcome | When | Ledger fields |
+|-----------------|------|----------------|
+| **Rejected** (Phase 1) | Unsupported file type, too large, empty | `status: rejected`, `reason`, `next_steps` (e.g. "Add .jpeg to supported-file-types…") |
+| **Skipped** (Phase 2) | Parse failed, no text | `status: skipped`, `reason`; optional `suggested_doc_type` and `next_steps` if classification was run on partial text |
+| **Skipped** (Phase 4+) | Unclassifiable, duplicate content, etc. | `status: skipped`, `reason`, optional `suggested_doc_type`, `next_steps` |
+| **Failed** (any) | Exception or store failure | `status: failed`, `reason`, optional `next_steps` |
+| **Ingested** (after Phase 9) | Success | `status: ingested`, `doc_type`, optional `next_steps` (e.g. "Use feedback API to correct doc_type if needed") |
+
+**Write points:** (1) After Phase 1 if rejected; (2) after Phase 2 if parse fails; (3) after Phase 4/6 if skipped (e.g. duplicate); (4) after Phase 9 on success; (5) on any unhandled exception (failed). The ledger key is `(domain_id, source)` where `source` is the filename or content-based id used for idempotency.
+
+**API:** `GET /api/v1/{domainId}/ingestion/ledger?status=rejected&since=2026-03-01` returns ledger entries so you can see which documents were ingested and which weren’t, with reasons and next_steps.
+
+### 17.2 Preflight (classify-only) flow
+
+`POST /api/v1/{domainId}/ingest/preflight` accepts a single file (multipart). It does **not** run the full pipeline to store; it only:
+
+1. **Accept & validate** — Same as Phase 1. If file type is unsupported → return immediately with `status: rejected`, `reason`, and `next_steps` (e.g. add extension, enable image parser).
+2. **Parse** — Same as Phase 2. If parse fails → return `status: failed`, `reason`, `next_steps`.
+3. **Classify only** — Run Phase 4 (classification) on the extracted text. No extraction (Phase 5), no split/embed/store.
+4. **Response** — `suggested_doc_type`, optional `confidence`, `next_steps` (e.g. "Ready to ingest; suggested doc_type: resume. Call POST /ingest to ingest.").
+
+Preflight does **not** write to the embedding store or create segments. Optionally, the implementation can write a ledger entry with `status: preflight` so the run appears in the ledger for auditing.
+
+### 17.3 Next-steps generation
+
+**next_steps** is produced from a small rule set keyed by status and reason (or phase), so the engine stays config-driven. Examples:
+
+- Unsupported file type → "Add `<ext>` to supported-file-types in domain YAML and enable an image parser (OCR or vision) if this is an image."
+- Parse failed → "Re-export or fix the file and try again; or use a different format."
+- No extractable text → "Enable OCR in config for scanned PDFs, or provide a text-layer PDF."
+- Duplicate content → "No action; or delete existing by source and re-ingest if you need to refresh."
+- Ingested → "Document ingested as `<doc_type>`. Use feedback API to correct doc_type or metadata if needed."
+
+Configuration can expose a **next-steps template** map in domain or app config so operators can customize messages without code changes.

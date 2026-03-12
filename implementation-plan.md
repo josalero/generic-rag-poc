@@ -624,6 +624,7 @@ These can be scheduled after the core 13 iterations.
 | **Optional B** | Feedback API (HITL) | [technical-design.md § 19](./technical-design.md#19-human-in-the-loop-and-feedback) | Controller tests for POST feedback/query and feedback/ingestion; service/repository tests. |
 | **Optional C** | Hot-reload domains | Admin reload endpoint | Test: load second YAML or change, call reload, assert registry updated. |
 | **Optional D** | SSE ingest progress | Ingest stream endpoint | Test: MockMvc SSE client or similar; expect events. |
+| **Optional E** | Ingestion ledger + classification-help | [technical-design.md § 23](./technical-design.md#23-ingestion-ledger-and-classification-help-flow), [ingestion-pipeline.md § 17](./ingestion-pipeline.md#17-ingestion-ledger-and-classification-help) | Ledger: persist per-file status (ingested/rejected/skipped/failed), reason, next_steps; GET ledger API. Preflight: POST preflight (classify-only), return suggested_doc_type, next_steps. Tests: ledger write on each outcome, GET with filters; preflight returns correct next_steps for unsupported type and for parse failure. |
 
 ---
 

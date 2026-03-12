@@ -63,6 +63,7 @@ domain:
   # ── File handling ──
   documents-path: <string>           # optional, folder for batch ingestion
   supported-file-types: [<string>]   # required, at least one, e.g. [".pdf", ".docx"]
+  # Files with other extensions are rejected; the ingestion ledger and preflight API return next_steps (e.g. "Add .jpeg to supported-file-types and enable image parser") — see technical-design § 23.
   chunk-size: <integer>              # required, 50–10000
   chunk-overlap: <integer>           # required, 0–5000
 

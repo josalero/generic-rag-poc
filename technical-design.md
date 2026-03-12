@@ -34,6 +34,7 @@
 20. [OCR and image document support](#20-ocr-and-image-document-support)
 21. [Custom algorithms vs LLM](#21-custom-algorithms-vs-llm)
 22. [Supported languages (English and Spanish)](#22-supported-languages-english-and-spanish)
+23. [Ingestion ledger and classification-help flow](#23-ingestion-ledger-and-classification-help-flow)
 
 **Child Documents:** [Ingestion Pipeline](./ingestion-pipeline.md) | [Query Pipeline](./query-pipeline.md) | [Extraction Strategies](./extraction-strategies.md) | [Domain Configuration Guide](./domain-configuration-guide.md) | [Framework Code](./framework-code.md) | [Implementation Plan](./implementation-plan.md) | [Model Recommendations](./model-recommendations.md)
 
@@ -511,6 +512,8 @@ CREATE INDEX idx_embeddings_ivfflat ON document_embeddings
 POST   /api/v1/{domainId}/ingest                     Upload documents
 POST   /api/v1/{domainId}/ingest/folder               Batch ingest from folder
 POST   /api/v1/{domainId}/ingest/stream               Upload with SSE progress
+POST   /api/v1/{domainId}/ingest/preflight            Classify-only (no store); returns suggested_doc_type, next_steps (see § 23)
+GET    /api/v1/{domainId}/ingestion/ledger            List ingestion ledger entries (status, reason, next_steps; optional filters) (see § 23)
 POST   /api/v1/{domainId}/query                       Query with optional filters (optional `language`: en, es)
 GET    /api/v1/{domainId}/doc-types                    List supported doc_types (from YAML)
 GET    /api/v1/domains                                 List registered domains (from YAML)
@@ -853,7 +856,7 @@ flowchart LR
 ```
 
 - **Query path:** After the API returns the answer, the UI (or another system) can call `POST /api/v1/{domainId}/feedback/query` with a rating and/or the corrected answer. No change to the core query pipeline; feedback is a separate write.
-- **Ingestion path:** After a file is ingested, a reviewer can see inferred `doc_type` and metadata (e.g. in an admin UI). Corrections are sent via `POST /api/v1/{domainId}/feedback/ingestion`. Optionally, the engine could support “re-run extraction with corrected doc_type” or “patch metadata and re-embed” as a follow-up action.
+- **Ingestion path:** After a file is ingested, a reviewer can see inferred `doc_type` and metadata (e.g. in an admin UI). Corrections are sent via `POST /api/v1/{domainId}/feedback/ingestion`. Optionally, the engine could support “re-run extraction with corrected doc_type” or “patch metadata and re-embed” as a follow-up action. The **ingestion ledger** (§ 23) tracks which files were ingested vs rejected/skipped/failed and stores **next_steps**; the **preflight** (classify-only) flow helps classify a file and understand next steps before or instead of full ingest.
 
 ### 19.3 Feedback model (per domain)
 
@@ -1047,3 +1050,70 @@ Configuration (e.g. `app.query.supported-languages: [en, es]`, `app.query.defaul
 ### 22.3 Extensibility
 
 Adding a new language (e.g. French `fr`) later: (1) add locale to `app.query.supported-languages`; (2) add `general-stop-words-file-fr` (or equivalent); (3) add prompt templates for that locale in domain YAML if needed; (4) no change to core engine interfaces.
+
+---
+
+## 23. Ingestion ledger and classification-help flow
+
+The pipeline returns per-request results (ingested / skipped / failed) for each file. To **track which documents were ingested and which weren’t** over time, and to **help you classify files and decide next steps**, the design adds an **ingestion ledger** and a **classification-help** (preflight) flow.
+
+### 23.1 Ingestion ledger (persistent tracking)
+
+An **ingestion ledger** stores a record for each file the system has seen (per domain), so you can query later: what was ingested, what wasn’t, and why.
+
+| Field | Description |
+|-------|--------------|
+| `domain_id` | Domain (e.g. recruiting, legal). |
+| `source` | File identifier (filename or content hash); unique per domain for idempotency. |
+| `status` | `ingested` \| `rejected` \| `skipped` \| `failed`. |
+| `reason` | Human-readable reason (e.g. "Unsupported file type .jpeg", "No extractable text", "Duplicate content", "PDF parse failed"). |
+| `doc_type` | Assigned doc_type when status is `ingested`; null otherwise. |
+| `suggested_doc_type` | Optional; set when classification was run but file was not ingested (e.g. rejected type) or when confidence is low. |
+| `next_steps` | Optional; short actionable suggestion (see § 23.3). |
+| `run_id` | Optional; links to a batch or stream run. |
+| `created_at` | When the record was written. |
+
+**API:** `GET /api/v1/{domainId}/ingestion/ledger` with optional filters: `status`, `since`, `limit`, `offset`. Returns a list of ledger entries so you can see “which documents were ingested and which don’t” and act on failures or skips.
+
+Ledger records are written on every ingest attempt (single, batch, or folder): on **reject** (e.g. unsupported type) before the pipeline runs; on **skip** or **fail** after parse/classify/store as applicable; on **ingested** after successful store. Configuration (e.g. `app.ingestion.ledger.enabled: true`) can enable or disable persistence so domains that do not need tracking can leave the ledger off.
+
+### 23.2 Classification-help flow (preflight / classify-only)
+
+A **classification-help** flow helps you understand what kind of document a file is and what to do next, even when the file cannot be fully ingested yet (e.g. unsupported extension like `.jpeg` for a resume scan).
+
+**Option A — Preflight (classify without ingesting):**  
+`POST /api/v1/{domainId}/ingest/preflight` accepts a single file (multipart). The system:
+
+1. **Rejects** if the file type is not in `supported-file-types` → return immediately with `status: rejected`, `reason: "Unsupported file type .jpeg for this domain"`, and **next_steps** (e.g. “Add .jpeg to supported-file-types and enable an image parser (OCR or vision) to ingest this file.”).
+2. If the file type **is** supported (or a config allows “preflight for unsupported types”): parse → run **classification only** (no extraction, no embed, no store). Return `suggested_doc_type`, optional `confidence`, and **next_steps** (e.g. “Ready to ingest; suggested doc_type: resume. Call POST /ingest to ingest, or correct doc_type via feedback and re-ingest.”).
+3. If parse fails (e.g. corrupted PDF): return `status: failed`, `reason`, and **next_steps** (e.g. “Fix or re-export the file and try again.”).
+
+**Option B — Enrich ledger entries with suggested_doc_type and next_steps:**  
+When a file is **rejected** (unsupported type), the ledger entry can still offer **next_steps** (e.g. “Add .jpeg to supported-file-types and enable image parser”). When a file is **skipped** or **failed** after parsing (e.g. no text, or parse error), the pipeline can run classification on whatever text was extracted and store **suggested_doc_type** and **next_steps** in the ledger so the user sees “we think this is a certification; next steps: …”.
+
+Either or both options can be implemented; the ledger is the single place to see “what was ingested, what wasn’t, and what to do next.”
+
+### 23.3 Next-steps suggestions (actionable guidance)
+
+The **next_steps** field gives short, actionable guidance so you can understand the next steps to take. Examples:
+
+| Scenario | Reason | next_steps (example) |
+|----------|--------|----------------------|
+| Unsupported file type | Only .pdf, .docx accepted | Add `.jpeg` to `supported-file-types` in domain YAML and enable an image parser (OCR or vision) to ingest this file. |
+| Parse failed | PDF corrupted or password-protected | Re-export or fix the file and try again; or use a different format. |
+| No extractable text | Scanned PDF, OCR not enabled | Enable OCR in config for scanned PDFs, or provide a text-layer PDF. |
+| Duplicate content | Same content already ingested | No action; or delete existing by source and re-ingest if you need to refresh. |
+| Classification low confidence | Suggested doc_type but uncertain | Confirm or correct doc_type and re-ingest with the desired type. |
+| Ingested | Success | Document ingested as `resume`. Use feedback API to correct doc_type or metadata if needed. |
+
+These messages can be generated from a small rule set keyed by `status` and `reason` (or by phase: reject, parse, classify, store) so the engine remains config-driven.
+
+### 23.4 Summary
+
+| Capability | Purpose |
+|------------|---------|
+| **Ingestion ledger** | Persistent record per file: ingested vs rejected/skipped/failed, with reason, optional suggested_doc_type, next_steps. Query via `GET .../ingestion/ledger` to see what was ingested and which don’t. |
+| **Preflight (classify-only)** | Understand document type and next steps without ingesting; useful for unsupported types (e.g. JPEG resume) or to confirm classification before full ingest. |
+| **next_steps** | Short, actionable text so you know what to do next (add extension, enable OCR, fix file, confirm doc_type, etc.). |
+
+See [ingestion-pipeline.md § Ingestion ledger and classification-help](./ingestion-pipeline.md) for phase-by-phase behavior and API details.
