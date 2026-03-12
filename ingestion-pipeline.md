@@ -11,17 +11,66 @@ stored in PGVector, enriched with domain-specific and doc_type-specific metadata
 
 ```mermaid
 flowchart TD
-    INPUT["Upload / Folder"] --> P1["Phase 1: Accept — validation, dedup gate"]
-    P1 --> P2["Phase 2: Parse — file → raw text"]
-    P2 --> P3["Phase 3: Sanitize — normalize text"]
-    P3 --> P4["Phase 4: Classify — assign doc_type"]
-    P4 --> P5["Phase 5: Extract — metadata per field"]
-    P5 --> P6["Phase 6: Resolve Entity — link to domain entity"]
-    P6 --> P7["Phase 7: Split — text → segments"]
-    P7 --> P8["Phase 8: Embed — segments → vectors"]
-    P8 --> P9["Phase 9: Store — vectors + metadata → PG"]
-    P9 --> P10["Phase 10: Audit — log result per file"]
+    INPUT["POST /api/v1/{domainId}/ingest\n📄 DomainIngestController"]
+    INPUT --> ORCH
+
+    subgraph ORCH["DomainIngestionService — orchestrator, zero domain logic"]
+        direction TB
+
+        subgraph ACCEPT["🔒 ACCEPT & VALIDATE — phases 1–3"]
+            P1["Phase 1 · Accept\nDomainRegistry.get(domainId)\ncheck supported-file-types\nConcurrentHashMap⟨hash, Future⟩ dedup gate"]
+            P2["Phase 2 · Parse\nDocumentParserRegistry\nPDF → PDFBox  |  DOCX → POI  |  TXT → UTF-8\nfallback → Apache Tika"]
+            P3["Phase 3 · Sanitize\nnull bytes · Unicode NFC\nwhitespace · control chars"]
+            P1 --> P2 --> P3
+        end
+
+        subgraph ENRICH["🧠 CLASSIFY & EXTRACT — phases 4–6 (config-driven from domain YAML)"]
+            P4["Phase 4 · Classify doc_type\nConfigDrivenDocumentClassifier\nclassification-rules sorted by priority\nfilename globs + content-keywords → first match"]
+            P5["Phase 5 · Extract metadata\nConfigDrivenMetadataExtractor\nper-field strategy: regex → llm → keyword → composite\nLLM fields batched into single call\nmodel resolved: field.model → domain.models.extraction → default"]
+            P6["Phase 6 · Resolve entity\ncross-doc linkage: filename → hash → name → explicit ID\nentity-id-key from YAML (e.g. candidate_id)"]
+            P4 --> P5 --> P6
+        end
+
+        subgraph STORE["💾 SPLIT · EMBED · STORE — phases 7–9"]
+            P7["Phase 7 · Split\nDocumentSplitters.recursive(chunkSize, chunkOverlap)\nchunk-size & chunk-overlap from domain YAML\nattach full metadata to every segment"]
+            P8["Phase 8 · Embed\nEmbeddingModel.embedAll(batch)\nvirtual-thread per batch\nmax-segments-per-batch from app config"]
+            P9["Phase 9 · Store\nPGVector · EmbeddingStoreIngestor\ndelete old segments by source filename\nbase + extension metadata as JSONB"]
+            P7 --> P8 --> P9
+        end
+
+        subgraph AUDIT["📊 AUDIT & REPORT — phase 10"]
+            P10["Phase 10 · Audit\nSSE progress events: file-ingested / file-skipped\nIngestAuditService run summary\nMetrics: processed · skipped · elapsed"]
+        end
+
+        ACCEPT --> ENRICH --> STORE --> AUDIT
+    end
+
+    DOMAIN_YAML[("domain YAML\n─────────────────\nclassification-rules\ndoc-types · metadata[]\nchunk-size · chunk-overlap\nsupported-file-types\nentity-id-key\nmodels.extraction")]
+    APP_YAML[("application.yml\n─────────────────\napp.ingest.*\nconcurrent-files\nllm-enrichment.max-chars\nbatch-fields · dedup gate\napp.models.definitions")]
+
+    DOMAIN_YAML -.->|"rules & field defs"| ENRICH
+    DOMAIN_YAML -.->|"chunk config"| STORE
+    APP_YAML -.->|"concurrency & limits"| ACCEPT
+    APP_YAML -.->|"model registry"| ENRICH
+    APP_YAML -.->|"batch size & timeout"| STORE
 ```
+
+### Class responsibility map
+
+| Area | Primary class | Role |
+|---|---|---|
+| Entry point | `DomainIngestController` | REST endpoint — accepts file(s), delegates to service |
+| Orchestration | `DomainIngestionService` | Drives all 10 phases; contains no domain logic |
+| Domain lookup | `DomainRegistry` | Maps `domainId` → `ConfigDrivenRagDomain` |
+| File parsing | `DocumentParserRegistry` | Tries registered `DocumentParser` impls in order |
+| Classification | `ConfigDrivenDocumentClassifier` | Evaluates `classification-rules` from YAML |
+| Metadata extraction | `ConfigDrivenMetadataExtractor` | Iterates `metadata[]` fields, delegates to strategies |
+| Strategy dispatch | `ExtractionStrategyFactory` | Creates `regex` / `llm` / `keyword` / `composite` strategy instances |
+| Model resolution | `ModelRegistry` | Resolves model alias → `ChatModel` (field → domain → default) |
+| Splitting | LangChain4j `DocumentSplitters` | Recursive text splitting with configurable size / overlap |
+| Embedding | LangChain4j `EmbeddingModel` | Converts text segments to vector embeddings |
+| Storage | LangChain4j `EmbeddingStoreIngestor` + PGVector | Persists vectors + metadata as JSONB |
+| Audit | `IngestAuditService` | Records run summary and per-file events |
 
 ---
 

@@ -349,17 +349,51 @@ Extension metadata keys per doc_type are defined entirely in the domain YAML.
 
 ```mermaid
 flowchart TD
-    A["upload(domainId, filename, bytes)"] --> B["DomainIngestionService\n(orchestrator — zero domain logic)"]
-    B --> S1["1. Accept & Validate\ndomain lookup, file type check"]
-    S1 --> S2["2. Parse\nDocumentParserRegistry"]
-    S2 --> S3["3. Sanitize\nnull bytes, Unicode, whitespace"]
-    S3 --> S4["4. Classify doc_type\npriority-based rules from YAML"]
-    S4 --> S5["5. Extract metadata\nper-field strategies from YAML"]
-    S5 --> S6["6. Resolve entity\ncross-document linkage"]
-    S6 --> S7["7. Split + embed\ndomain chunk config + EmbeddingModel"]
-    S7 --> S8["8. Store\nPGVector with full metadata JSONB"]
-    S8 --> S9["9. Deduplicate\ncontent hash gate"]
-    S9 --> S10["10. Audit & report\nSSE events + metrics"]
+    API["POST /api/v1/{domainId}/ingest\n📄 DomainIngestController"] --> SVC
+
+    subgraph SVC["DomainIngestionService — orchestrator, zero domain logic"]
+        direction TB
+
+        subgraph ACCEPT["🔒 ACCEPT & VALIDATE"]
+            A1["Resolve domain\nDomainRegistry.get(domainId)"]
+            A2["Validate file type\nagainst domain.supported-file-types"]
+            A3["Dedup gate\nConcurrentHashMap⟨hash, Future⟩"]
+            A1 --> A2 --> A3
+        end
+
+        subgraph PARSE["📄 PARSE & SANITIZE"]
+            B1["Select parser\nDocumentParserRegistry\nPDF → PDFBox | DOCX → POI | TXT → UTF-8"]
+            B2["Extract text\nparser.extractText(bytes)"]
+            B3["Sanitize\nnull bytes · Unicode NFC · whitespace"]
+            B1 --> B2 --> B3
+        end
+
+        subgraph ENRICH["🧠 CLASSIFY & EXTRACT — config-driven from YAML"]
+            C1["Classify doc_type\nConfigDrivenDocumentClassifier\nrules sorted by priority, first match wins"]
+            C2["Extract metadata\nConfigDrivenMetadataExtractor\nper-field: regex → llm → keyword → composite"]
+            C3["Resolve entity\ncross-doc linkage by name / hash / ID"]
+            C1 --> C2 --> C3
+        end
+
+        subgraph STORE["💾 SPLIT · EMBED · STORE"]
+            D1["Split text → segments\nDocumentSplitters.recursive\nchunk-size & chunk-overlap from YAML"]
+            D2["Embed segments → vectors\nEmbeddingModel\nbatched, virtual threads"]
+            D3["Store in PGVector\nEmbeddingStoreIngestor\nbase + extension metadata as JSONB"]
+            D1 --> D2 --> D3
+        end
+
+        subgraph AUDIT["📊 AUDIT & REPORT"]
+            E1["Emit SSE progress\nfile-ingested / file-skipped"]
+            E2["Record metrics\nprocessed · skipped · elapsed"]
+            E1 --> E2
+        end
+
+        ACCEPT --> PARSE --> ENRICH --> STORE --> AUDIT
+    end
+
+    YAML[("domain YAML\nclassification-rules\ndoc-types · metadata\nchunk-size · chunk-overlap\nmodels.extraction")] -.->|configures| ENRICH
+    YAML -.->|configures| STORE
+    MODELS[("application.yml\napp.models.definitions\ngpt-4o-mini · gpt-4o · ...")] -.->|model per field| ENRICH
 ```
 
 **Full 10-phase detailed design:** [ingestion-pipeline.md](./ingestion-pipeline.md)
