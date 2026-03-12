@@ -30,6 +30,7 @@
 16. [Dependencies to Add](#16-dependencies-to-add)
 17. [Security Considerations](#17-security-considerations)
 18. [Extensibility Checklist](#18-extensibility-checklist)
+19. [Human-in-the-Loop and Feedback](#19-human-in-the-loop-and-feedback)
 
 **Child Documents:** [Ingestion Pipeline](./ingestion-pipeline.md) | [Query Pipeline](./query-pipeline.md) | [Extraction Strategies](./extraction-strategies.md) | [Domain Configuration Guide](./domain-configuration-guide.md) | [Framework Code](./framework-code.md)
 
@@ -503,6 +504,11 @@ GET    /api/v1/domains                                 List registered domains (
 GET    /api/v1/{domainId}/stats                        Domain-level metrics
 DELETE /api/v1/{domainId}/documents/{source}            Remove document and its segments
 POST   /api/v1/admin/domains/reload                    Hot-reload domain YAML definitions
+
+# Human-in-the-loop and feedback (see § 19)
+POST   /api/v1/{domainId}/feedback/query              Submit query feedback (rating, correction)
+POST   /api/v1/{domainId}/feedback/ingestion           Submit ingestion feedback (classification/metadata correction)
+GET    /api/v1/{domainId}/feedback                     List feedback for domain (optional; admin/export)
 ```
 
 ---
@@ -590,6 +596,14 @@ be/
 │   │   │   │   └── DomainQueryController.java
 │   │   │   └── service/
 │   │   │       └── DomainQueryService.java             Orchestrator (S, D)
+│   │   │
+│   │   ├── feedback/                                   ── OPTIONAL (HITL) ──
+│   │   │   ├── controller/
+│   │   │   │   └── DomainFeedbackController.java       POST feedback/query, feedback/ingestion
+│   │   │   ├── service/
+│   │   │   │   └── FeedbackService.java                Persist per-domain feedback
+│   │   │   └── repository/
+│   │   │       └── FeedbackRepository.java             Or event publisher
 │   │   │
 │   │   └── metrics/
 │   │
@@ -772,3 +786,102 @@ See [extraction-strategies.md § Adding a Custom Strategy](./extraction-strategi
 3. Remove or set `enabled: false` in the corresponding YAML
 4. The `DomainRegistry` accepts both config-driven and handcoded domains
 5. **Engine treats them identically (Liskov substitution)**
+
+---
+
+## 19. Human-in-the-Loop and Feedback
+
+Human-in-the-loop (HITL) means **humans review, correct, or approve** outputs so the system can improve **per domain** without hardcoding. Feedback is stored by domain and used to suggest config changes, export training data, or tune behavior.
+
+### 19.1 Where humans intervene
+
+| Touchpoint | What the human does | What gets captured |
+|------------|---------------------|---------------------|
+| **Query answer** | Rate (thumbs up/down or score), or correct the answer text | `query_id`, question, original answer, rating/corrected answer, retrieved doc IDs |
+| **Retrieval** | Mark which retrieved chunks were actually useful (optional) | Which segment IDs were relevant / not relevant |
+| **Classification** | Correct `doc_type` when the engine misclassified | `source` filename, inferred `doc_type`, corrected `doc_type` |
+| **Metadata extraction** | Correct one or more extracted fields | `source`, field name, extracted value, corrected value |
+| **Guardrail** | Override a block (e.g. false positive) or confirm block | Query, rule ID, blocked vs. allowed override |
+
+All of this is **optional and configurable per domain**: e.g. a domain YAML can enable only query feedback, or only ingestion feedback.
+
+### 19.2 How HITL fits the flows
+
+```mermaid
+flowchart LR
+    subgraph QUERY["Query path"]
+        Q1["User asks question"] --> Q2["Engine: retrieve + generate answer"]
+        Q2 --> Q3["Return answer + explainability"]
+        Q3 --> Q4["Human: rate or correct answer"]
+        Q4 --> Q5["POST /feedback/query"]
+    end
+
+    subgraph INGEST["Ingestion path"]
+        I1["File ingested"] --> I2["Engine: classify + extract metadata"]
+        I2 --> I3["Store segments"]
+        I3 --> I4["Human: correct doc_type or metadata"]
+        I4 --> I5["POST /feedback/ingestion"]
+    end
+
+    Q5 --> STORE[("Feedback store\nper domain")]
+    I5 --> STORE
+    STORE -.->|"Learning loop"| LEARN["Suggest YAML changes\nExport training data\nTune reranker / prompts"]
+```
+
+- **Query path:** After the API returns the answer, the UI (or another system) can call `POST /api/v1/{domainId}/feedback/query` with a rating and/or the corrected answer. No change to the core query pipeline; feedback is a separate write.
+- **Ingestion path:** After a file is ingested, a reviewer can see inferred `doc_type` and metadata (e.g. in an admin UI). Corrections are sent via `POST /api/v1/{domainId}/feedback/ingestion`. Optionally, the engine could support “re-run extraction with corrected doc_type” or “patch metadata and re-embed” as a follow-up action.
+
+### 19.3 Feedback model (per domain)
+
+Feedback is **keyed by domain** so each vertical owns its data. A minimal schema:
+
+| Field | Query feedback | Ingestion feedback |
+|-------|----------------|--------------------|
+| `domain_id` | ✓ | ✓ |
+| `feedback_type` | `answer_rating` \| `answer_correction` | `classification_correction` \| `metadata_correction` |
+| `id` / `query_id` / `run_id` | Link to query or ingest run | Link to file/source |
+| `payload` | `{ "rating": 1 \| -1, "corrected_answer": "..." }` | `{ "source": "...", "corrected_doc_type": "...", "corrected_metadata": { "field": "value" } }` |
+| `created_at` | ✓ | ✓ |
+
+Storage can be a table (e.g. `query_feedback`, `ingestion_feedback`) or a generic `feedback` table with `domain_id`, `type`, `reference_id`, `payload` (JSONB). No hardcoded domain logic: the same API and schema work for recruiting, legal, medical.
+
+### 19.4 How feedback is used (“learning” per domain)
+
+The system does **not** auto-rewrite YAML or auto-train models. Learning is mediated by **ops / domain experts** or by **exported data**:
+
+| Use of feedback | Description |
+|-----------------|-------------|
+| **Suggest YAML changes** | A batch job or admin report reads feedback and suggests updates: e.g. “Add keyword X to classification rule for doc_type Y”, “Add this regex for field Z”, “Tighten guardrail rule R”. Humans apply changes in the domain YAML. |
+| **Export training data** | Export (query, correct_answer) or (document, correct_doc_type, correct_metadata) for fine-tuning an LLM or training a classifier. Training runs outside this RAG app; improved models are plugged in via existing model config. |
+| **Reranker / prompt tuning** | Use (query, retrieved_ids, which_was_relevant) to tune a reranker or to pick better prompt templates. Can be manual (A/B test prompts) or automated if you add a reranker that consumes feedback. |
+| **Metrics and monitoring** | Per-domain dashboards: rating distribution, correction rate by doc_type or field. Drives prioritization of which rules or prompts to improve first. |
+
+So “learning” = **feedback in, human or batch decisions out**; the RAG engine stays config-driven and does not mutate its own YAML.
+
+### 19.5 Configuration (optional, per domain)
+
+Domain YAML can declare which feedback is enabled and where it goes:
+
+```yaml
+# Optional section in domain YAML
+feedback:
+  query:
+    enabled: true
+    collect-ratings: true
+    collect-corrections: true
+  ingestion:
+    enabled: true
+    collect-classification-corrections: true
+    collect-metadata-corrections: true
+```
+
+Application config can point to the feedback store (e.g. same DB, or a dedicated schema/topic):
+
+```yaml
+app:
+  feedback:
+    enabled: ${FEEDBACK_ENABLED:true}
+    storage: jdbc  # or "event" to publish to a topic for async processing
+```
+
+This keeps HITL and feedback **config-driven and per-domain** without hardcoding behavior in the engine.

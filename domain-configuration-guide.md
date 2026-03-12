@@ -451,3 +451,25 @@ yajsv -s domain-definition-schema.json domains/*.yml
 8. Validate against the JSON Schema
 9. Test with representative documents
 10. Set `enabled: true` and restart (or hot-reload)
+
+---
+
+## 11. Human-in-the-Loop and Feedback (Optional)
+
+To let the system **learn per domain** from human input, you can enable feedback collection. See [technical-design.md § 19. Human-in-the-Loop and Feedback](./technical-design.md#19-human-in-the-loop-and-feedback) for the full design.
+
+**Optional block in domain YAML:**
+
+```yaml
+feedback:
+  query:
+    enabled: true
+    collect-ratings: true      # thumbs up/down or score
+    collect-corrections: true  # corrected answer text
+  ingestion:
+    enabled: true
+    collect-classification-corrections: true   # corrected doc_type
+    collect-metadata-corrections: true        # corrected field values
+```
+
+When enabled, the API accepts `POST /api/v1/{domainId}/feedback/query` and `.../feedback/ingestion`. Feedback is stored per domain and can drive suggested YAML changes, training data export, or metrics — without hardcoding any learning logic in the engine.
