@@ -1,6 +1,6 @@
 # Quality Gates (apply to every iteration)
 
-> Parent: [implementation-plan.md](../implementation-plan.md)
+> Parent: [implementation-plan.md](../implementation-plan.md) · See also: Cursor rule **quality-gates** (Checkstyle, SpotBugs, PMD, Sonar on every code change).
 
 These gates apply to **every iteration** before merge. They keep the codebase buildable, tested, and maintainable.
 
@@ -17,17 +17,31 @@ These gates apply to **every iteration** before merge. They keep the codebase bu
 
 | Gate | Requirement | How to verify |
 |------|--------------|----------------|
-| **Lint / Checkstyle** | No new violations in changed files | `./gradlew checkstyleMain checkstyleTest` (if configured) or IDE lint |
+| **Lint / Checkstyle** | No new violations in changed files | See § 1.5 — Checkstyle, SpotBugs, PMD required |
 | **Meaningful assertions** | Tests assert behavior, not only "no exception" | Review: every test has at least one assertion on outcome |
 | **No PII in logs** | No names, emails, phones in log messages | Review + grep for sensitive patterns |
 | **Specific exceptions** | Catch specific exception types; no empty catch blocks | Code review |
+
+## 1.5 Static analysis (Checkstyle, SpotBugs, PMD, Sonar)
+
+**Checkstyle, SpotBugs, and PMD must be run on every code change.** Fix any violations before considering the change done (Checkstyle: line length 100, Javadoc where required; SpotBugs and PMD: resolve all reported issues).
+
+| Tool | Requirement | How to verify |
+|------|--------------|----------------|
+| **Checkstyle** | No violations (line length 100, Javadoc where required) | **Maven:** `mvn checkstyle:check` · **Gradle:** `./gradlew checkstyleMain checkstyleTest` |
+| **SpotBugs** | No bugs reported | **Maven:** `mvn spotbugs:check` · **Gradle:** `./gradlew spotbugsMain spotbugsTest` (if SpotBugs plugin applied) |
+| **PMD** | No violations | **Maven:** `mvn pmd:check` · **Gradle:** `./gradlew pmdMain pmdTest` (if PMD plugin applied) |
+| **Sonar** | In CI only; locally skipped by default | **CI:** run with `-Dsonar.skip=false` and `sonar.host.url` set; **local:** Sonar skipped by default |
+
+**Before submitting or pushing:** Run the full verify phase so all gates run: **Maven** `mvn verify` (Checkstyle, SpotBugs, PMD are bound to verify) or **Gradle** `./gradlew check` / `./gradlew build` (if Checkstyle, SpotBugs, PMD are bound to `check`). Fix any Checkstyle, SpotBugs, or PMD violations before considering the change done.
 
 ## 1.3 Definition of Done (per iteration)
 
 - [ ] All deliverables for the iteration implemented and referenced in this plan
 - [ ] Unit tests (and integration tests where specified) added and passing
 - [ ] No hardcoded secrets or PII in new code
-- [ ] Build green: `./gradlew clean build` (including tests; optional checkstyle)
+- [ ] **Checkstyle, SpotBugs, PMD** run and **no violations** (fix before merge); see § 1.5
+- [ ] Build green: `./gradlew clean build` or `mvn clean verify` (including tests and static analysis)
 - [ ] PR description links to this plan and lists the iteration number
 
 ## 1.4 Optional (recommended)

@@ -177,7 +177,7 @@ domain:
   display-name: <string>             # human-readable
   enabled: <boolean>
   documents-path: <string>           # optional, folder for batch ingestion
-  supported-file-types: [<string>]   # e.g. [".pdf", ".docx"]
+  supported-file-types: [<string>]   # e.g. [".pdf", ".doc", ".docx"] — resumes often as .doc or .docx
   chunk-size: <integer>              # 50–10000
   chunk-overlap: <integer>           # 0–5000
   entity-id-key: <string>            # optional, e.g. "candidate_id"
@@ -432,15 +432,26 @@ flowchart LR
 |---|---|---|
 | Accept | `DomainIngestionService` | Orchestrates all phases; zero domain logic |
 | Parse | `DocumentParserRegistry` | PDFBox / POI / Tika; optional OCR for scanned PDFs; optional image parser (e.g. certificates) — see [§ 20](#20-ocr-and-image-document-support) |
-| Classify | `ConfigDrivenDocumentClassifier` | Priority-sorted rules from YAML; first match wins |
+| Classify | `ConfigDrivenDocumentClassifier` | Priority-sorted rules from YAML; first match wins; **optional LLM fallback** when flag enabled (see § 9.1) |
 | Extract | `ConfigDrivenMetadataExtractor` | Per-field strategies: regex → llm → keyword → composite |
 | Store | `EmbeddingStoreIngestor` | LangChain4j split + embed + PGVector write |
 
+### 9.1 Optional LLM-based classification (fallback)
+
+Classification is **rule-based by default** (filename patterns + content keywords; no LLM). You can **turn on** an optional **LLM fallback** so that when the rule-based classifier would use the **fallback rule** (lowest priority, e.g. generic doc_type), the system can call an LLM to suggest a doc_type from the document content instead.
+
+| Aspect | Description |
+|--------|--------------|
+| **When it runs** | Only when (1) the LLM fallback is **enabled** (see flags below), and (2) the **first matching rule** is the fallback rule (e.g. priority 1, `min-keyword-hits: 0`). If a higher-priority rule matched, the LLM is **not** called. |
+| **What the LLM does** | Receives a truncated excerpt of the document text and a list of valid `doc_type` ids from the domain; returns a single doc_type id (or the fallback doc_type on failure/parse error). |
+| **Flag to turn on/off** | **Application:** `app.ingest.classification.llm-fallback-enabled` (default `false`). **Per domain:** `classification.llm-fallback-enabled` in domain YAML (optional override; when set, overrides the app default for that domain). So you can enable LLM classification only for specific domains. |
+| **Config** | Optional per domain: `classification.llm-fallback-model` (model id for classification), `classification.llm-fallback-prompt` (prompt template with placeholders for text and doc_type list). If not set, use domain `models.extraction` and a default prompt. |
+
+When the flag is **off** (default), behavior is unchanged: only rule-based classification. When **on**, the fallback path may use the LLM to improve doc_type for ambiguous or generic filenames (e.g. "document.pdf" that is actually a certification).
+
 **Full 10-phase detailed design:** [ingestion-pipeline.md](./ingestion-pipeline.md)
 
-Covers: per-file error isolation, LLM field batching, concurrent virtual thread model,
-re-ingestion (delete + re-embed), entity resolution strategies, deduplication gates,
-SSE progress streaming, audit trail structure.
+Covers: per-file error isolation, LLM field batching, **ingestion executed on virtual threads** (batch and folder: one virtual thread per file; configurable via `app.ingest.virtual-threads-enabled`), re-ingestion (delete + re-embed), entity resolution strategies, deduplication gates, SSE progress streaming, audit trail structure.
 
 ---
 
@@ -513,7 +524,7 @@ POST   /api/v1/{domainId}/ingest                     Upload documents
 POST   /api/v1/{domainId}/ingest/folder               Batch ingest from folder
 POST   /api/v1/{domainId}/ingest/stream               Upload with SSE progress
 POST   /api/v1/{domainId}/ingest/preflight            Classify-only (no store); returns suggested_doc_type, next_steps (see § 23)
-GET    /api/v1/{domainId}/ingestion/ledger            List ingestion ledger entries (status, reason, next_steps; optional filters) (see § 23)
+GET    /api/v1/{domainId}/ingestion/ledger            Dashboard/report: what was ingested and what wasn’t, with reason; optional filters status, since, limit, offset (see § 23)
 POST   /api/v1/{domainId}/query                       Query with optional filters (optional `language`: en, es)
 GET    /api/v1/{domainId}/doc-types                    List supported doc_types (from YAML)
 GET    /api/v1/domains                                 List registered domains (from YAML)
@@ -1013,7 +1024,7 @@ Use **regex**, **keyword**, or **composite (regex/keyword first)** so the LLM is
 
 | Pipeline step | Prefer | LLM only when |
 |---------------|--------|----------------|
-| Classification | Custom (patterns + keywords) | — (already custom) |
+| Classification | Custom (patterns + keywords); **optional LLM fallback** when flag enabled (§ 9.1) | Fallback path only (when no rule matched except fallback and `llm-fallback-enabled` is true) |
 | Extraction — structured fields | Regex, keyword, composite | Free-form or highly variable |
 | Extraction — summaries / open-ended | LLM or composite with LLM fallback | — |
 | Guardrails | term-block, pattern-block | Nuanced intent / disguised requests |
@@ -1073,7 +1084,20 @@ An **ingestion ledger** stores a record for each file the system has seen (per d
 | `run_id` | Optional; links to a batch or stream run. |
 | `created_at` | When the record was written. |
 
-**API:** `GET /api/v1/{domainId}/ingestion/ledger` with optional filters: `status`, `since`, `limit`, `offset`. Returns a list of ledger entries so you can see “which documents were ingested and which don’t” and act on failures or skips.
+**Endpoint:** `GET /api/v1/{domainId}/ingestion/ledger` — use this to understand **what was ingested and what wasn’t, with a reason** for each file.
+
+| Query parameter | Type | Description |
+|-----------------|------|-------------|
+| `status` | string | Filter: `ingested`, `rejected`, `skipped`, `failed` (optional) |
+| `since` | ISO-8601 | Only entries with `created_at >= since` (optional) |
+| `limit` | integer | Max entries (default e.g. 100; optional) |
+| `offset` | integer | Pagination offset (optional) |
+
+**Response:** `200 OK`, body e.g. `{ "domainId": "recruiting", "entries": [ { "source": "resume-maria.pdf", "status": "ingested", "reason": null, "doc_type": "resume", "next_steps": "Document ingested as resume. Use feedback API to correct doc_type or metadata if needed.", "created_at": "2026-03-11T14:30:00Z" }, { "source": "photo.jpg", "status": "rejected", "reason": "Unsupported file type .jpg", "doc_type": null, "next_steps": "Add .jpg to supported-file-types and enable an image parser.", "created_at": "2026-03-11T14:31:00Z" } ], "total": 2 }`.
+
+**API (legacy label):** `GET /api/v1/{domainId}/ingestion/ledger` with optional filters: `status`, `since`, `limit`, `offset`. Returns a list of ledger entries so you can see “which documents were ingested and which don’t” and act on failures or skips.
+
+**Dashboard or endpoint to understand what was ingested and what wasn’t (with reason):** Use the **ledger endpoint** above. Optionally, a **dashboard** (or admin UI) calls `GET .../ingestion/ledger` with query params `status`, `since`, `limit`, `offset` and displays a table: **Source**, **Status**, **Reason**, **Doc type**, **Next steps**, **Created at**. Filter by status (e.g. only rejected/skipped/failed) and by date to see what was ingested and what wasn’t and why. Response shape: `{ "domainId": "...", "entries": [ { "source", "status", "reason", "doc_type", "suggested_doc_type", "next_steps", "created_at" } ], "total" }`. A minimal dashboard can be delivered as an optional iteration (static page or SPA that consumes this API).
 
 Ledger records are written on every ingest attempt (single, batch, or folder): on **reject** (e.g. unsupported type) before the pipeline runs; on **skip** or **fail** after parse/classify/store as applicable; on **ingested** after successful store. Configuration (e.g. `app.ingestion.ledger.enabled: true`) can enable or disable persistence so domains that do not need tracking can leave the ledger off.
 
@@ -1099,7 +1123,7 @@ The **next_steps** field gives short, actionable guidance so you can understand 
 
 | Scenario | Reason | next_steps (example) |
 |----------|--------|----------------------|
-| Unsupported file type | Only .pdf, .docx accepted | Add `.jpeg` to `supported-file-types` in domain YAML and enable an image parser (OCR or vision) to ingest this file. |
+| Unsupported file type | Only .pdf, .doc, .docx accepted | Add `.jpeg` to `supported-file-types` in domain YAML and enable an image parser (OCR or vision) to ingest this file. |
 | Parse failed | PDF corrupted or password-protected | Re-export or fix the file and try again; or use a different format. |
 | No extractable text | Scanned PDF, OCR not enabled | Enable OCR in config for scanned PDFs, or provide a text-layer PDF. |
 | Duplicate content | Same content already ingested | No action; or delete existing by source and re-ingest if you need to refresh. |

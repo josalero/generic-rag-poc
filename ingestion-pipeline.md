@@ -6,7 +6,7 @@
 
 ## 1. Pipeline Overview
 
-The ingestion pipeline transforms raw documents (PDF, DOCX, TXT) into embedded text segments
+The ingestion pipeline transforms raw documents (PDF, DOC, DOCX, TXT) into embedded text segments
 stored in PGVector, enriched with domain-specific and doc_type-specific metadata. The platform supports **English and Spanish** (and multilingual embeddings); query-side language handling (stop words, answer language) is in [query-pipeline.md](./query-pipeline.md) and [technical-design.md § 22](./technical-design.md#22-supported-languages-english-and-spanish).
 
 ```mermaid
@@ -71,6 +71,10 @@ flowchart TD
 | Embedding | LangChain4j `EmbeddingModel` | Converts text segments to vector embeddings |
 | Storage | LangChain4j `EmbeddingStoreIngestor` + PGVector | Persists vectors + metadata as JSONB |
 | Audit | `IngestAuditService` | Records run summary and per-file events |
+
+### Concurrency: virtual threads
+
+**Ingestion must be executed on virtual threads.** Batch and folder ingest run each file on a dedicated virtual thread (e.g. via `Executors.newVirtualThreadPerTaskExecutor()`), so many files can be processed in parallel without blocking platform threads. Embedding batches can also run on virtual threads. This is configurable via `app.ingest.virtual-threads-enabled` (default `true`). See [§ 10 Phase 8 — Embed](#10-phase-8--embed) for the concurrency model and [implementation-plan.md Iteration 9](./implementation-plan.md#11-iteration-9--ingestion-service).
 
 ---
 
@@ -157,7 +161,7 @@ Output: validated input or rejection
 | Condition | Response |
 |---|---|
 | Unknown domain | `404 Not Found` — domain not registered |
-| Unsupported file type | `422 Unprocessable Entity` — "Only .pdf, .docx files accepted for domain 'legal'" |
+| Unsupported file type | `422 Unprocessable Entity` — "Only .pdf, .doc, .docx files accepted for domain 'legal'" |
 | File too large | `413 Payload Too Large` |
 | Empty file | Skip with audit event `"skipped"`, reason `"Empty file"` |
 
@@ -210,6 +214,8 @@ it takes precedence over the Tika catch-all. Image parser is optional (e.g. for 
 - Extracts text from body paragraphs, tables, headers, footers
 - Ignores embedded images and charts (text only)
 
+**Legacy .doc (Word 97–2003):** Resumes and other documents are often submitted in `.doc` format. Support can be provided by (1) a dedicated **DocDocumentParser** (e.g. Apache POI `HWPFDocument`) registered before Tika, or (2) the **Tika fallback** parser, which handles `.doc` among other formats. Domains that accept resumes should include `".doc"` in `supported-file-types` (e.g. `[".pdf", ".doc", ".docx"]`).
+
 **PlainTextParser:**
 - Reads bytes as UTF-8 (with fallback charset detection via BOM)
 - Supports `.txt`, `.md`, `.csv`
@@ -258,6 +264,7 @@ Output: doc_type string (e.g. "resume", "contract", "opinion")
 | 4.5 | Apply threshold | Rule matches if: filename matched AND keyword hits >= `min-keyword-hits` |
 | 4.6 | First match wins | Return the `doc-type` of the first matching rule |
 | 4.7 | Fallback | If no rule matches, use the rule with `priority: 1` and `min-keyword-hits: 0` (the fallback) |
+| 4.8 | **Optional LLM fallback** | If the matching rule is the **fallback rule** and **LLM classification fallback is enabled** (`app.ingest.classification.llm-fallback-enabled` or domain `classification.llm-fallback-enabled`), call the LLM with document excerpt and list of valid doc_types; use returned doc_type (or keep fallback doc_type on failure). When the flag is off (default), skip this step. See [technical-design.md § 9.1](./technical-design.md#91-optional-llm-based-classification-fallback). |
 
 ### Classification decision flow
 
@@ -510,11 +517,13 @@ Output: List<Embedding> (vector representations)
 | 8.4 | Retry on transient failure | Retry once on timeout or 5xx from embedding provider |
 | 8.5 | Cancel on hard failure | If embedding model returns 4xx → cancel, skip file |
 
-### Concurrency model
+### Concurrency model (virtual threads)
+
+Ingestion is executed on **virtual threads**: each file in a batch or folder run is processed on its own virtual thread, and embedding tasks use virtual threads as well. The executor is typically `Executors.newVirtualThreadPerTaskExecutor()` when `app.ingest.virtual-threads-enabled` is true (default).
 
 ```mermaid
 flowchart TD
-    subgraph FILE["File-Level Parallelism (app.ingest.concurrent-files, default 4)"]
+    subgraph FILE["File-Level Parallelism — virtual threads (app.ingest.concurrent-files, default 4)"]
         VT1["VirtualThread-1: file-a.pdf → parse → classify → extract"]
         VT2["VirtualThread-2: file-b.pdf → parse → classify → extract"]
         VT3["VirtualThread-3: file-c.pdf → parse → classify → extract"]
@@ -669,6 +678,18 @@ File: "resume-maria.pdf" (updated version)
   5. Entity version history is preserved
 ```
 
+### Running ingestion multiple times (tracking and hash-based skip)
+
+When you **run the process several times** (e.g. folder ingest on a schedule), you need to **track what was ingested** and **avoid re-processing unchanged files** to save resources (no redundant embedding or store calls).
+
+- **Track what was ingested:** Persist per `(domain_id, source)` at least: `source`, `status`, **content_hash**, and optionally timestamp. The [ingestion ledger](./technical-design.md#23-ingestion-ledger-and-classification-help-flow) (optional iteration E) provides this; the service can also store `content_hash` in segment metadata or a dedicated table.
+- **Compare by hash:** After parse and sanitize, compute **content_hash** (SHA-256 of normalized text). Look up the hash previously stored for this `(domain_id, source)`.
+  - **Same hash** → file unchanged; **skip** extract, split, embed, store; record skip (e.g. `skipped — Unchanged (same content hash)`).
+  - **No stored hash or different hash** → new or updated file; run the full pipeline (classify → extract → split → embed → store) and persist the new hash.
+- **Re-ingest updated files:** Same source with a **different** hash is treated as an update: delete existing segments for that source, then run the full pipeline (see Re-ingestion above).
+
+See [implementation-plan.md § 11.2.1](./implementation-plan.md#1121-running-ingestion-multiple-times-tracking--hash-based-skip) for acceptance criteria and flow.
+
 ---
 
 ## 14. Error Handling Strategy
@@ -821,6 +842,8 @@ app:
     file-timeout-seconds: ${INGEST_FILE_TIMEOUT_SECONDS:60}
     concurrent-files: ${INGEST_CONCURRENT_FILES:4}
     virtual-threads-enabled: ${INGEST_VIRTUAL_THREADS_ENABLED:true}
+    classification:
+      llm-fallback-enabled: ${INGEST_CLASSIFICATION_LLM_FALLBACK_ENABLED:false}   # when true, use LLM to suggest doc_type when fallback rule would apply
     llm-enrichment:
       enabled: ${INGEST_LLM_ENRICHMENT_ENABLED:true}
       max-chars: ${INGEST_LLM_ENRICHMENT_MAX_CHARS:8000}
@@ -833,7 +856,7 @@ app:
 domain:
   chunk-size: 500        # tokens per segment
   chunk-overlap: 100     # overlap between segments
-  supported-file-types: [".pdf", ".docx"]
+  supported-file-types: [".pdf", ".doc", ".docx"]
   documents-path: ./downloaded-resumes
 ```
 
@@ -844,6 +867,15 @@ domain:
 ## 17. Ingestion ledger and classification-help
 
 See [technical-design.md § 23](./technical-design.md#23-ingestion-ledger-and-classification-help-flow) for the product design. This section describes how the pipeline integrates with the ledger and the preflight (classify-only) flow.
+
+### Dashboard or endpoint: what was ingested and what wasn’t (with reason)
+
+To understand **what was ingested and what wasn’t, with a reason** for each file, use the **ledger endpoint** and optionally a **dashboard**:
+
+- **Endpoint:** `GET /api/v1/{domainId}/ingestion/ledger` with optional query params: `status` (ingested | rejected | skipped | failed), `since` (ISO-8601 date), `limit`, `offset`. Response: list of entries with `source`, `status`, `reason`, `doc_type`, `next_steps`, `created_at`. This is the single API for reporting.
+- **Dashboard:** A dashboard (or admin UI) can call this endpoint and display a table with columns **Source**, **Status**, **Reason**, **Doc type**, **Next steps**, **Created at**, with filters by status and date. The dashboard is any UI that consumes the ledger GET; an optional iteration can deliver a minimal static page or SPA.
+
+See [technical-design.md § 23.1](./technical-design.md#231-ingestion-ledger-persistent-tracking) for the full API contract (query params, response shape).
 
 ### 17.1 Ingestion ledger — where records are written
 
@@ -859,7 +891,7 @@ When `app.ingestion.ledger.enabled` is true, the orchestrator writes a **ledger 
 
 **Write points:** (1) After Phase 1 if rejected; (2) after Phase 2 if parse fails; (3) after Phase 4/6 if skipped (e.g. duplicate); (4) after Phase 9 on success; (5) on any unhandled exception (failed). The ledger key is `(domain_id, source)` where `source` is the filename or content-based id used for idempotency.
 
-**API:** `GET /api/v1/{domainId}/ingestion/ledger?status=rejected&since=2026-03-01` returns ledger entries so you can see which documents were ingested and which weren’t, with reasons and next_steps.
+**API (dashboard/report):** `GET /api/v1/{domainId}/ingestion/ledger` with optional `?status=rejected&since=2026-03-01&limit=100&offset=0` returns ledger entries so you can see which documents were ingested and which weren’t, with reasons and next_steps.
 
 ### 17.2 Preflight (classify-only) flow
 

@@ -7,7 +7,7 @@ domain:
 
   # ── File handling ──
   documents-path: ${RECRUITING_DOCS_PATH:./downloaded-resumes}
-  supported-file-types: [".pdf", ".docx"]
+  supported-file-types: [".pdf", ".doc", ".docx"]   # resumes often come as .doc (legacy Word) or .docx
   chunk-size: 500
   chunk-overlap: 100
 
@@ -70,7 +70,7 @@ domain:
     - doc-type: resume
       priority: 1     # lowest priority = default fallback
       match:
-        filename-patterns: ["*.pdf", "*.docx"]
+        filename-patterns: ["*.pdf", "*.doc", "*.docx"]
         content-keywords: ["experience", "education", "skills"]
         min-keyword-hits: 0    # always matches as fallback
 

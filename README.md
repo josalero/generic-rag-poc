@@ -57,7 +57,8 @@ Each step has a **dedicated iteration doc** under [iterations/](./iterations/) w
 | **B** | Feedback API (HITL: query + ingestion) | [technical-design § 19](./technical-design.md#19-human-in-the-loop-and-feedback) |
 | **C** | Hot-reload domains | Admin reload endpoint |
 | **D** | SSE ingest progress | Ingest stream endpoint |
-| **E** | Ingestion ledger + classification-help | [technical-design § 23](./technical-design.md#23-ingestion-ledger-and-classification-help-flow), [ingestion-pipeline § 17](./ingestion-pipeline.md#17-ingestion-ledger-and-classification-help) |
+| **E** | Ingestion ledger + classification-help + **dashboard/endpoint** (what was ingested, what wasn’t, with reason) | [technical-design § 23](./technical-design.md#23-ingestion-ledger-and-classification-help-flow), [ingestion-pipeline § 17](./ingestion-pipeline.md#17-ingestion-ledger-and-classification-help) |
+| **F** | LLM classification fallback (flag on/off) | [technical-design § 9.1](./technical-design.md#91-optional-llm-based-classification-fallback) — when enabled, use LLM to suggest doc_type when fallback rule would apply |
 
 ---
 
@@ -66,6 +67,7 @@ Each step has a **dedicated iteration doc** under [iterations/](./iterations/) w
 - **OpenRouter only** — All LLM and embedding API access via OpenRouter (no direct provider clients).
 - **Languages** — English and Spanish for stop words, query language, and answer generation; extensible.
 - **Config over hardcoding** — Stop words, classification rules, extraction patterns, models, prompts, and parsers come from YAML/config; guardrails remain YAML-defined.
+- **Classification** — Rule-based (filename + content keywords) by default; **optional LLM fallback** when a flag is on (per app or per domain) to suggest doc_type when the fallback rule would apply.
 - **Ingestion ledger & classification-help** — Persistent ledger of ingested vs rejected/skipped/failed per file; preflight (classify-only) and `next_steps` to guide users (e.g. add file type, enable OCR).
 
 ---
@@ -75,5 +77,5 @@ Each step has a **dedicated iteration doc** under [iterations/](./iterations/) w
 1. Read [technical-design.md](./technical-design.md) for architecture and [implementation-plan.md](./implementation-plan.md) for iteration order and gates.
 2. Start with [iterations/iteration-00-quality-gates.md](./iterations/iteration-00-quality-gates.md), then implement [iteration-01-foundation.md](./iterations/iteration-01-foundation.md) through iteration 13 in order.
 3. Use the corresponding iteration doc as the single source for that slice; [framework-code.md](./framework-code.md) supplies the code to implement.
-4. Run quality gates after each iteration: `./gradlew clean build`, tests, coverage, checkstyle (if configured).
-5. Optionally add iterations A–E (override, feedback, reload, SSE, ingestion ledger + preflight) after the core 13.
+4. Run quality gates after each iteration: build, tests, coverage, and **Checkstyle, SpotBugs, PMD** (no violations). Before submitting or pushing, run `mvn verify` or `./gradlew check` / `./gradlew build`. Fix any violations before considering the change done. Sonar runs in CI with `-Dsonar.skip=false`; locally skipped by default. See [iteration-00-quality-gates.md](./iterations/iteration-00-quality-gates.md) and Cursor rule **quality-gates**.
+5. Optionally add iterations A–F (override, feedback, reload, SSE, ingestion ledger + preflight, LLM classification fallback) after the core 13.

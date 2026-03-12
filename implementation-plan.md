@@ -72,17 +72,22 @@ These gates apply to **every iteration** before merge. They keep the codebase bu
 
 | Gate | Requirement | How to verify |
 |------|--------------|----------------|
-| **Lint / Checkstyle** | No new violations in changed files | `./gradlew checkstyleMain checkstyleTest` (if configured) or IDE lint |
+| **Checkstyle, SpotBugs, PMD** | Must run on every code change; no violations (see § 1.5) | **Maven:** `mvn checkstyle:check spotbugs:check pmd:check` or `mvn verify` · **Gradle:** `./gradlew checkstyleMain checkstyleTest` (+ SpotBugs/PMD if configured) or `./gradlew check` |
 | **Meaningful assertions** | Tests assert behavior, not only “no exception” | Review: every test has at least one assertion on outcome |
 | **No PII in logs** | No names, emails, phones in log messages | Review + grep for sensitive patterns |
 | **Specific exceptions** | Catch specific exception types; no empty catch blocks | Code review |
+
+### 1.5 Static analysis (Checkstyle, SpotBugs, PMD, Sonar)
+
+**Checkstyle, SpotBugs, and PMD must be run on every code change.** Before submitting or pushing, run `mvn verify` (Maven; Checkstyle, SpotBugs, PMD bound to verify) or `./gradlew check` / `./gradlew build` (Gradle; bind plugins to `check`). Fix any Checkstyle (line length 100, Javadoc where required), SpotBugs, or PMD violations before considering the change done. **Sonar:** In CI, run with `-Dsonar.skip=false` and `sonar.host.url` set; locally Sonar is skipped by default. Full detail: [iteration-00-quality-gates.md § 1.5](./iterations/iteration-00-quality-gates.md#15-static-analysis-checkstyle-spotbugs-pmd-sonar).
 
 ### 1.3 Definition of Done (per iteration)
 
 - [ ] All deliverables for the iteration implemented and referenced in this plan
 - [ ] Unit tests (and integration tests where specified) added and passing
 - [ ] No hardcoded secrets or PII in new code
-- [ ] Build green: `./gradlew clean build` (including tests; optional checkstyle)
+- [ ] **Checkstyle, SpotBugs, PMD** run and **no violations** (fix before merge); see § 1.5
+- [ ] Build green: `./gradlew clean build` or `mvn clean verify` (including tests and static analysis)
 - [ ] PR description links to this plan and lists the iteration number
 
 ### 1.4 Optional (recommended)
@@ -323,7 +328,7 @@ flowchart TD
 ### 8.2 Acceptance criteria
 
 - Loader reads YAML from classpath or file path; builds at least one `RagDomain` with correct `domainId`, `supportedFileTypes`, `chunkSize`, `chunkOverlap`.
-- Classifier: priority-ordered rules; filename + content keywords; first match wins; fallback rule.
+- Classifier: priority-ordered rules; filename + content keywords; first match wins; fallback rule. **Optional LLM fallback:** when `app.ingest.classification.llm-fallback-enabled` or domain `classification.llm-fallback-enabled` is true and the matching rule is the fallback rule, call LLM to suggest doc_type; use returned doc_type or keep fallback on failure. When flag is false (default), classification is rule-only. See [technical-design.md § 9.1](./technical-design.md#91-optional-llm-based-classification-fallback).
 - Guardrail evaluator: evaluates rules in order; first block wins.
 - Prompt provider: returns query and fallback template from YAML.
 
@@ -412,12 +417,27 @@ flowchart TD
 ### 11.2 Acceptance criteria
 
 - Service receives `domainId`, `filename`, `bytes`; resolves domain from registry; validates file type; selects parser; parses and sanitizes; classifies; extracts metadata; splits with domain’s splitter; embeds; stores in embedding store. Per-file errors do not abort batch when multiple files.
+- **Ingestion is executed on virtual threads:** Batch and folder ingest run each file (and optionally each embedding task) on a virtual thread, e.g. via `Executors.newVirtualThreadPerTaskExecutor()`, so many files are processed in parallel without blocking platform threads. Configurable via `app.ingest.virtual-threads-enabled` (default true). See [ingestion-pipeline.md § 1 Concurrency](./ingestion-pipeline.md#concurrency-virtual-threads) and § 11 Phase 8.
 - Sanitization: null bytes, Unicode NFC, whitespace (as in ingestion-pipeline.md).
 - Re-ingestion: delete existing segments by source filename before storing new ones.
+- **Running the process multiple times:** When ingestion is run repeatedly (e.g. folder ingest on a schedule), the system must support **tracking what was ingested** and **skipping unchanged files** to save resources. After parse (and sanitize), compute a **content hash** (e.g. SHA-256 of normalized text); if a record exists for the same `(domain_id, source)` with the same content hash (e.g. in the ingestion ledger or in store metadata), **skip** the expensive steps (extract, split, embed, store) and record a skip (e.g. ledger status `skipped`, reason `"Unchanged (same content hash)"`). Only **new files** (no prior record for source) or **updated files** (different content hash) go through the full pipeline. See [§ 11.2.1 Running ingestion multiple times](#1121-running-ingestion-multiple-times-tracking--hash-based-skip) and [ingestion-pipeline.md § 13 Deduplication](./ingestion-pipeline.md#13-deduplication).
+
+### 11.2.1 Running ingestion multiple times (tracking & hash-based skip)
+
+When you run the ingestion process **several times** (e.g. batch folder ingest daily or on demand), you need to:
+
+| Need | Solution |
+|------|----------|
+| **Track what was ingested** | Persist an **ingestion ledger** (or equivalent) per `(domain_id, source)` with at least: `source`, `status` (ingested \| skipped \| failed), `content_hash`, and optionally `updated_at`. Optional iteration E adds the full ledger API; the ingestion service should record outcomes and hash so repeat runs can consult them. |
+| **Save resources** | After parsing a file, compute **content_hash** (SHA-256 of normalized text). Before running extract → split → embed → store, **compare** this hash with the hash previously stored for that `(domain_id, source)`. If the hash is the same, **skip** the rest of the pipeline (no extraction, no embedding, no store) and record a skip (e.g. `skipped — Unchanged (same content hash)`). Only **new** sources or **updated** content (different hash) go through full ingestion. |
+| **Re-ingest updated files** | If the same source (e.g. filename) has a **different** content hash than the stored one, treat it as an update: delete existing segments for that source, then run the full pipeline and store new segments (re-ingestion as in ingestion-pipeline.md § 13). |
+
+**Flow (repeat run):** For each file in the batch: (1) accept & parse → sanitize → compute `content_hash`; (2) lookup stored record for `(domain_id, source)` and its hash; (3) if same hash → skip (record skip in ledger/audit); (4) if no record or different hash → run classify, extract, split, embed, store, and record outcome + hash. This minimizes parsing (still needed to get hash) and avoids redundant embedding and store calls for unchanged files.
 
 ### 11.3 Tests to add
 
 - `DomainIngestionServiceTest`: with mocked `DomainRegistry` (one domain), mocked parser (returns fixed text), mocked embedder and store; call ingest one file; verify store invoked with expected metadata (domain, doc_type, source), and segment count or store call count. Test unknown domain throws; unsupported file type throws.
+- Test **repeat run / hash-based skip:** when the same file (same source, same content hash) is ingested twice, the second run skips extract/embed/store (e.g. returns or records "skipped — Unchanged (same content hash)") and does not call the embedder or store again. When the same source has different content (different hash), full re-ingestion occurs (delete old segments, then store new).
 - Optional: integration test with test profile, in-memory or Testcontainers PGVector, real parser and embedder (or stub embedder), one small PDF/DOCX.
 
 ### 11.4 Quality gates
@@ -624,7 +644,8 @@ These can be scheduled after the core 13 iterations.
 | **Optional B** | Feedback API (HITL) | [technical-design.md § 19](./technical-design.md#19-human-in-the-loop-and-feedback) | Controller tests for POST feedback/query and feedback/ingestion; service/repository tests. |
 | **Optional C** | Hot-reload domains | Admin reload endpoint | Test: load second YAML or change, call reload, assert registry updated. |
 | **Optional D** | SSE ingest progress | Ingest stream endpoint | Test: MockMvc SSE client or similar; expect events. |
-| **Optional E** | Ingestion ledger + classification-help | [technical-design.md § 23](./technical-design.md#23-ingestion-ledger-and-classification-help-flow), [ingestion-pipeline.md § 17](./ingestion-pipeline.md#17-ingestion-ledger-and-classification-help) | Ledger: persist per-file status (ingested/rejected/skipped/failed), reason, next_steps; GET ledger API. Preflight: POST preflight (classify-only), return suggested_doc_type, next_steps. Tests: ledger write on each outcome, GET with filters; preflight returns correct next_steps for unsupported type and for parse failure. |
+| **Optional E** | Ingestion ledger + classification-help + **dashboard/endpoint** | [technical-design.md § 23](./technical-design.md#23-ingestion-ledger-and-classification-help-flow), [ingestion-pipeline.md § 17](./ingestion-pipeline.md#17-ingestion-ledger-and-classification-help) | Ledger: persist per-file status (ingested/rejected/skipped/failed), reason, next_steps. **Endpoint:** GET ledger API so callers can see **what was ingested and what wasn’t, with reason** (query params: status, since, limit, offset). **Dashboard:** Optional UI that calls this endpoint and shows a table (Source, Status, Reason, Doc type, Next steps, Created at) with filters. Preflight: POST preflight (classify-only). Tests: ledger write on each outcome, GET with filters; preflight next_steps. |
+| **Optional F** | LLM classification fallback (flag on/off) | [technical-design.md § 9.1](./technical-design.md#91-optional-llm-based-classification-fallback), [ingestion-pipeline.md Phase 4](./ingestion-pipeline.md#6-phase-4--classify) | When fallback rule matches and `app.ingest.classification.llm-fallback-enabled` or domain `classification.llm-fallback-enabled` is true, call LLM to suggest doc_type; otherwise rule-only. Tests: flag off → no LLM call; flag on + fallback rule → mock LLM called, doc_type from response. |
 
 ---
 

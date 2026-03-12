@@ -17,7 +17,7 @@ domain:
   id: my-domain
   display-name: "My Domain"
   enabled: true
-  supported-file-types: [".pdf"]
+  supported-file-types: [".pdf", ".doc", ".docx"]
   chunk-size: 500
   chunk-overlap: 100
 
@@ -25,7 +25,7 @@ domain:
     - doc-type: document
       priority: 1
       match:
-        filename-patterns: ["*.pdf"]
+        filename-patterns: ["*.pdf", "*.doc", "*.docx"]
         content-keywords: []
         min-keyword-hits: 0
 
@@ -62,8 +62,8 @@ domain:
 
   # ── File handling ──
   documents-path: <string>           # optional, folder for batch ingestion
-  supported-file-types: [<string>]   # required, at least one, e.g. [".pdf", ".docx"]
-  # Files with other extensions are rejected; the ingestion ledger and preflight API return next_steps (e.g. "Add .jpeg to supported-file-types and enable image parser") — see technical-design § 23.
+  supported-file-types: [<string>]   # required, at least one, e.g. [".pdf", ".doc", ".docx"]
+  # Resumes and other documents are often submitted as .doc (legacy Word) or .docx; include both if your domain accepts them. Files with other extensions are rejected; the ingestion ledger and preflight API return next_steps (e.g. "Add .jpeg to supported-file-types and enable image parser") — see technical-design § 23.
   chunk-size: <integer>              # required, 50–10000
   chunk-overlap: <integer>           # required, 0–5000
 
@@ -78,7 +78,11 @@ domain:
     extraction: <string>             # model ID for metadata extraction (e.g. "gpt-4o-mini")
     query: <string>                  # model ID for answer generation (e.g. "gpt-4o")
 
-  # ── Classification rules ──
+  # ── Classification (rules + optional LLM fallback) ──
+  classification:                     # optional
+    llm-fallback-enabled: <boolean>  # when true, use LLM to suggest doc_type when fallback rule would apply (overrides app.ingest.classification.llm-fallback-enabled)
+    llm-fallback-model: <string>     # optional, model id for classification; default: domain models.extraction
+    llm-fallback-prompt: <string>   # optional, prompt template (placeholders for text and doc_type list)
   classification-rules: [...]        # required, at least one rule
 
   # ── Document types ──
@@ -130,12 +134,37 @@ A rule matches when:
 1. The filename matches **any** of the `filename-patterns` (glob, case-insensitive)
 2. **AND** the number of `content-keywords` found in the text >= `min-keyword-hits`
 
+### Optional: LLM fallback (flag on/off)
+
+Classification is **rule-based only** by default. You can **turn on** an **LLM fallback** so that when the **fallback rule** would apply (no higher-priority rule matched), the system calls an LLM to suggest a doc_type from the content. Useful for ambiguous filenames (e.g. "document.pdf" that is actually a certification).
+
+| Level | Flag | Default |
+|-------|------|---------|
+| **Application** | `app.ingest.classification.llm-fallback-enabled` | `false` |
+| **Per domain** | `classification.llm-fallback-enabled` in domain YAML | not set (uses app default) |
+
+When **on** (app or domain): if the first matching rule is the fallback rule, the pipeline calls the LLM with a truncated excerpt and the list of valid doc_types; the LLM returns one doc_type id. On failure or parse error, the fallback rule’s doc_type is used. When **off** (default), only rules are used (no LLM call for classification).
+
+Example (enable LLM fallback for this domain only):
+
+```yaml
+classification:
+  llm-fallback-enabled: true
+  llm-fallback-model: "gpt-4o-mini"   # optional
+  llm-fallback-prompt: "Classify this document. Valid types: %s. Document excerpt:\n%s\nReturn only one doc_type id."
+classification-rules:
+  # ... rules as before ...
+```
+
+See [technical-design.md § 9.1](./technical-design.md#91-optional-llm-based-classification-fallback) and [ingestion-pipeline.md Phase 4](./ingestion-pipeline.md#6-phase-4--classify).
+
 ### Tips
 
 - Always include a **fallback rule** with `priority: 1` and `min-keyword-hits: 0`
 - Put the most specific rules at highest priority
 - Use `min-keyword-hits: 0` only for fallback — otherwise the rule matches everything
 - Test classification with representative documents before deploying
+- Use **LLM fallback** only when rule-based classification often picks the generic fallback; turn it off to save cost and latency when rules are sufficient
 
 ---
 
