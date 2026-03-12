@@ -463,3 +463,5 @@ app:
       dynamic-filter:
         metadata-key: ${RAG_RETRIEVER_DYNAMIC_FILTER_KEY:}
 ```
+
+**Embedding and chat models:** Production = benchmark-grade; development = free/low-cost (in-process, OpenRouter free). See [model-recommendations.md](./model-recommendations.md). Query model is set per domain in `models.query`.

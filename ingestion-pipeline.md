@@ -835,3 +835,5 @@ domain:
   supported-file-types: [".pdf", ".docx"]
   documents-path: ./downloaded-resumes
 ```
+
+**Embedding and LLM models:** Production = benchmark-grade (e.g. OpenAI); development = free/low-cost (in-process embeddings, OpenRouter free). See [model-recommendations.md](./model-recommendations.md). Extraction model is set per domain in `models.extraction`.

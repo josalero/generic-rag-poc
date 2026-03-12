@@ -151,7 +151,7 @@ flowchart TD
 
 ## 4. Iteration 2 — Config & model registry
 
-**Goal:** Load model definitions from `application.yml` and provide a `ModelRegistry` that resolves a model id to a `ChatModel`. Add general stop words (config or resource file).
+**Goal:** Load model definitions from `application.yml` (and profile-specific `application-{profile}.yml`) and provide a `ModelRegistry` that resolves a model id to a `ChatModel`. Add general stop words (config or resource file). Config should support both prod and dev profiles (Iteration 12 adds the profile files).
 
 ### 4.1 Deliverables (framework-code.md)
 
@@ -447,32 +447,43 @@ flowchart TD
 
 ---
 
-## 14. Iteration 12 — Auto-configuration & wiring
+## 14. Iteration 12 — Auto-configuration, wiring, and prod/dev profiles
 
-**Goal:** Wire all beans so the application starts with domain YAMLs loaded, registry populated, and ingest/query/admin endpoints available.
+**Goal:** Wire all beans so the application starts with domain YAMLs loaded and registry populated. Introduce **production** and **development** profiles so prod uses benchmark-grade models and dev uses free/low-cost models (see [model-recommendations.md](./model-recommendations.md)).
 
 ### 14.1 Deliverables (framework-code.md)
 
 | # | Component | Reference |
 |---|-----------|-----------|
 | 1 | `DomainAutoConfiguration` | § 10.1 |
-| 2 | `application.yml` (domains path, models, optional stop words) | § 2.3, § 2.4 |
-| 3 | At least one minimal domain YAML (e.g. `domains/minimal.yml`) | New or from examples |
+| 2 | **Base** `application.yml` | Shared: domains path, logging, server; no model definitions or profile-specific overrides. |
+| 3 | **Production** `application-prod.yml` | Default or explicit prod: `app.models.embedding: "text-embedding-3-small"`, definitions for `gpt-4o-mini`, `gpt-4o` (and optional Claude); PGVector 1536. |
+| 4 | **Development** `application-dev.yml` | `app.models.embedding: "in-process"`, definitions for `extraction-free`, `query-free` (OpenRouter free); optional neutral aliases `extraction` / `query` pointing to same. |
+| 5 | Profile-aware embedding bean | When `app.models.embedding` is `"in-process"` (dev), register an ONNX `EmbeddingModel` bean (e.g. `BgeSmallEnV15QuantizedEmbeddingModel`). When not (prod), use API-based embedding from config. Ensures one active embedding implementation per profile. |
+| 6 | At least one minimal domain YAML | e.g. `domains/minimal.yml` or reuse from examples. |
+| 7 | Optional: `application-test.yml` | Test profile: in-memory or test DB, stub or in-process models so tests do not call real APIs. |
 
 ### 14.2 Acceptance criteria
 
 - On startup, loader reads from `app.domains.definitions-path`; registry contains all enabled domains.
-- Ingest and query endpoints work end-to-end with a test domain (e.g. upload one file, then query).
-- Health or info endpoint (optional) reports loaded domains.
+- **Profile `prod` (or default):** Uses API embedding (OpenAI) and benchmark chat model definitions; PGVector schema/documentation assumes 1536.
+- **Profile `dev`:** Uses in-process ONNX embedding (384) and OpenRouter free chat definitions; PGVector for dev uses 384; separate DB or schema from prod.
+- Ingest and query endpoints work end-to-end with a test domain in both profiles (where applicable; dev may rely on OPENROUTER_API_KEY).
+- Health or info endpoint (optional) reports loaded domains and active profile or embedding type.
 
 ### 14.3 Tests to add
 
 - `DomainAutoConfigurationTest`: `@SpringBootTest` with test profile; assert bean `DomainRegistry` exists and has at least one domain from test YAML.
-- Optional: one end-to-end test (test profile, in-memory or test DB): start app, POST ingest one file, POST query, assert non-empty answer or result list.
+- **Profile prod:** `@SpringBootTest(properties = "spring.profiles.active=prod")` (or `application-prod.yml` on classpath): assert `EmbeddingModel` is not the in-process implementation (e.g. check bean type or a property); assert model definitions for gpt-4o-mini / gpt-4o are present in config.
+- **Profile dev:** `@SpringBootTest(properties = "spring.profiles.active=dev")`: assert in-process `EmbeddingModel` bean is present when `app.models.embedding=in-process`; assert definitions for extraction-free / query-free (or neutral aliases) are loaded.
+- Optional: one end-to-end test per profile (test profile with stub/mock LLM): start app, POST ingest one file, POST query, assert non-empty answer or result list.
 
 ### 14.4 Quality gates
 
-- `./gradlew bootRun` (or run with test profile) starts without error; `./gradlew test` passes.
+- `./gradlew bootRun` (or run with `--spring.profiles.active=prod` and with `dev`) starts without error.
+- `./gradlew test` passes; profile-specific tests do not require real API keys (use test profile with mocks or skip external calls).
+
+**Limitations of dev (free/low-cost) models:** See [model-recommendations.md § 4](./model-recommendations.md#4-limitations-of-free-and-low-cost-options) (rate limits, quality, dimensions, no SLA). Do not use dev models for benchmark reporting or production.
 
 ---
 
@@ -537,7 +548,7 @@ These can be scheduled after the core 13 iterations.
 | 9 | Ingestion service | Unit (mocks); optional integration |
 | 10 | Query service | Unit (mocks) |
 | 11 | REST controllers | Slice / MockMvc |
-| 12 | Auto-config, wiring | SpringBootTest |
+| 12 | Auto-config, wiring, prod/dev profiles | SpringBootTest (prod + dev profile) |
 | 13 | Exception handling, validation, health | Unit + controller |
 | Optional | Override, feedback, reload, SSE | Per feature |
 

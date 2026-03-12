@@ -33,7 +33,7 @@
 19. [Human-in-the-Loop and Feedback](#19-human-in-the-loop-and-feedback)
 20. [OCR and image document support](#20-ocr-and-image-document-support)
 
-**Child Documents:** [Ingestion Pipeline](./ingestion-pipeline.md) | [Query Pipeline](./query-pipeline.md) | [Extraction Strategies](./extraction-strategies.md) | [Domain Configuration Guide](./domain-configuration-guide.md) | [Framework Code](./framework-code.md) | [Implementation Plan](./implementation-plan.md)
+**Child Documents:** [Ingestion Pipeline](./ingestion-pipeline.md) | [Query Pipeline](./query-pipeline.md) | [Extraction Strategies](./extraction-strategies.md) | [Domain Configuration Guide](./domain-configuration-guide.md) | [Framework Code](./framework-code.md) | [Implementation Plan](./implementation-plan.md) | [Model Recommendations](./model-recommendations.md)
 
 ---
 
@@ -59,6 +59,7 @@ Stack: Spring Boot 4 + LangChain4j 1.11 + PGVector.
 |---|---|
 | [framework-code.md](./framework-code.md) | Complete Java code samples — all interfaces, engine classes, model registry, strategies, services, controllers, auto-configuration |
 | [implementation-plan.md](./implementation-plan.md) | Implementation plan — quality gates, testable iterations, and mapping of all framework-code to incremental deliverables |
+| [model-recommendations.md](./model-recommendations.md) | Model suggestions — production (market benchmark) vs development (free/low-cost); profiles and aliases |
 | [ingestion-pipeline.md](./ingestion-pipeline.md) | 10-phase ingestion flow — validation, parsing, classification, extraction, splitting, embedding, storage, dedup, error handling, concurrency model |
 | [query-pipeline.md](./query-pipeline.md) | 9-phase query flow — guardrails, retrieval, hybrid re-ranking, deduplication, LLM generation, pagination, caching |
 | [extraction-strategies.md](./extraction-strategies.md) | Each strategy in detail (regex, LLM, keyword, composite) with execution flows, code samples, and selection guide |
@@ -479,7 +480,7 @@ resolution, LLM fallback, in-flight query deduplication, LRU caching, explainabi
 ```sql
 CREATE TABLE IF NOT EXISTS document_embeddings (
     embedding_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    embedding      vector(1536),
+    embedding      vector(1536),  -- production: OpenAI text-embedding-3-small; dev: use 384 for in-process ONNX (separate DB/schema)
     text           text NOT NULL,
     metadata       jsonb NOT NULL
 );
@@ -635,16 +636,9 @@ app:
     hot-reload-enabled: ${DOMAIN_HOT_RELOAD:false}
 
   models:
-    default-model: "gpt-4o-mini"              # global fallback
+    default-model: "gpt-4o-mini"
     embedding: "text-embedding-3-small"
     definitions:
-      gpt-4o:
-        provider: openai
-        api-key: ${OPENAI_API_KEY}
-        model-name: gpt-4o
-        temperature: 0.1
-        max-tokens: 4096
-        timeout-seconds: 60
       gpt-4o-mini:
         provider: openai
         api-key: ${OPENAI_API_KEY}
@@ -652,14 +646,16 @@ app:
         temperature: 0.1
         max-tokens: 2048
         timeout-seconds: 30
-      claude-sonnet:
-        provider: openrouter
-        api-key: ${OPENROUTER_API_KEY}
-        model-name: anthropic/claude-3.5-sonnet
+      gpt-4o:
+        provider: openai
+        api-key: ${OPENAI_API_KEY}
+        model-name: gpt-4o
         temperature: 0.1
         max-tokens: 4096
         timeout-seconds: 60
 ```
+
+Use **production** config above for benchmark-grade quality. For **development**, use profile `dev` and free/low-cost models (in-process embeddings, OpenRouter free): [model-recommendations.md](./model-recommendations.md).
 
 **Full model registry code:** [framework-code.md § Model Registry](./framework-code.md#2-model-registry-config)
 

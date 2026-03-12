@@ -24,9 +24,10 @@ domain:
     - profiles
 
   # ── Model selection (references app.models.definitions in application.yml) ──
+  # Production: benchmark-grade (gpt-4o-mini, gpt-4o). Dev: use extraction-free / query-free (profile dev).
   models:
-    extraction: "gpt-4o-mini"        # cheap/fast for metadata extraction (high volume)
-    query: "gpt-4o"                  # capable model for user-facing answer generation
+    extraction: "gpt-4o-mini"        # production; in dev profile use extraction-free
+    query: "gpt-4o"                  # production; in dev profile use query-free
 
   # ── Document classification rules ──
   # Evaluated top-down by priority (highest first). First match wins.

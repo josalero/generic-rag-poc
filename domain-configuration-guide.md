@@ -376,15 +376,21 @@ Individual metadata fields can override the domain default:
 | 3 | Domain-level `models.query` | Used for query answer generation only |
 | 4 (lowest) | App-level `app.models.default-model` | Global fallback in `application.yml` |
 
+### Production vs development
+
+The design supports **market benchmark** models for production and **free / low-cost** for development. See [model-recommendations.md](./model-recommendations.md).
+
+**Production (benchmark-grade):** Define in `application.yml` or `application-prod.yml`: `gpt-4o-mini`, `gpt-4o`, optional `claude-sonnet`. Domain YAML: `models.extraction: "gpt-4o-mini"`, `models.query: "gpt-4o"` (or use neutral aliases like `extraction` / `query` and resolve per profile). Embedding: OpenAI `text-embedding-3-small`; PGVector `vector(1536)`.
+
+**Development (free / low-cost):** Use profile `dev` and `application-dev.yml` with `extraction-free`, `query-free` (OpenRouter free), `embedding: "in-process"`. Domain YAML can use the same aliases if prod/dev define them; or use `extraction-free` / `query-free` in dev. Embedding: LangChain4j in-process ONNX (384 dims); PGVector `vector(384)` in a separate DB/schema.
+
 ### Typical model assignments
 
-| Use case | Model | Rationale |
-|---|---|---|
-| Bulk extraction (names, skills, dates) | `gpt-4o-mini` | High throughput, low cost |
-| Complex analysis (legal holdings) | `gpt-4o` / `deepseek-r1` | Needs reasoning |
-| Answer generation (user-facing) | `gpt-4o` | Quality matters |
-| Compliance-sensitive domains | `claude-sonnet` | Different provider |
-| Air-gapped / on-prem | `llama-local` (Ollama) | No data leaves network |
+| Use case | Production (benchmark) | Development (free / low-cost) |
+|----------|------------------------|-------------------------------|
+| Bulk extraction | `gpt-4o-mini` | `extraction-free` (OpenRouter free) |
+| Answer generation | `gpt-4o`, `claude-sonnet` | `query-free` (OpenRouter free) |
+| Complex analysis / guardrails | `gpt-4o`, Claude Sonnet | `query-free` or same as extraction-free |
 
 ---
 

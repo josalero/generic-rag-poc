@@ -293,20 +293,17 @@ public class ModelRegistry {
 
 ### 2.3 application.yml — Model Configuration
 
+Design supports **market benchmark** (production) and **free/low-cost** (development). Use **production** config by default; use **development** when `spring.profiles.active=dev`. See [model-recommendations.md](./model-recommendations.md).
+
+**Production (default) — benchmark-grade:**
+
 ```yaml
+# application.yml or application-prod.yml
 app:
   models:
     default-model: "gpt-4o-mini"
     embedding: "text-embedding-3-small"
     definitions:
-      gpt-4o:
-        provider: openai
-        api-key: ${OPENAI_API_KEY}
-        model-name: gpt-4o
-        temperature: 0.1
-        max-tokens: 4096
-        timeout-seconds: 60
-
       gpt-4o-mini:
         provider: openai
         api-key: ${OPENAI_API_KEY}
@@ -314,31 +311,51 @@ app:
         temperature: 0.1
         max-tokens: 2048
         timeout-seconds: 30
-
+      gpt-4o:
+        provider: openai
+        api-key: ${OPENAI_API_KEY}
+        model-name: gpt-4o
+        temperature: 0.1
+        max-tokens: 4096
+        timeout-seconds: 60
       claude-sonnet:
         provider: openrouter
         api-key: ${OPENROUTER_API_KEY}
+        base-url: https://openrouter.ai/api/v1
         model-name: anthropic/claude-3.5-sonnet
         temperature: 0.1
         max-tokens: 4096
         timeout-seconds: 60
+```
 
-      deepseek-r1:
+**Development (profile dev) — free / low-cost:**
+
+```yaml
+# application-dev.yml
+app:
+  models:
+    default-model: "extraction-free"
+    embedding: "in-process"
+    definitions:
+      extraction-free:
         provider: openrouter
         api-key: ${OPENROUTER_API_KEY}
-        model-name: deepseek/deepseek-r1
-        temperature: 0.1
-        max-tokens: 8192
-        timeout-seconds: 120
-
-      llama-local:
-        provider: openai
-        api-key: "not-needed"
-        model-name: llama3
+        base-url: https://openrouter.ai/api/v1
+        model-name: "openrouter/free"
         temperature: 0.1
         max-tokens: 2048
         timeout-seconds: 30
+      query-free:
+        provider: openrouter
+        api-key: ${OPENROUTER_API_KEY}
+        base-url: https://openrouter.ai/api/v1
+        model-name: "openrouter/free"
+        temperature: 0.1
+        max-tokens: 4096
+        timeout-seconds: 60
 ```
+
+Domain YAML can use **neutral aliases** (`extraction`, `query`) and define them per profile: in prod map to `gpt-4o-mini` / `gpt-4o`, in dev map to `extraction-free` / `query-free`. Or use concrete IDs in domain YAML and override only in application-{profile}.yml. `ModelRegistry` must support `base-url` for OpenRouter. For `embedding: "in-process"`, wire an ONNX `EmbeddingModel` bean; PGVector uses `vector(384)` in dev, `vector(1536)` in prod.
 
 ### 2.4 General stop words (config / resource file)
 
@@ -2512,6 +2529,8 @@ dependencies {
     implementation 'dev.langchain4j:langchain4j-open-ai'
     implementation 'dev.langchain4j:langchain4j-pgvector'
     implementation 'dev.langchain4j:langchain4j-document-parser-apache-pdfbox'
+    // In-process embedding for development (free, 384 dims); use vector(384) in dev PGVector
+    implementation 'dev.langchain4j:langchain4j-embeddings-bge-small-en-v1.5-q:' + langchain4jVersion
     implementation 'org.apache.pdfbox:pdfbox:3.0.4'
     implementation 'org.apache.poi:poi-ooxml:5.3.0'
 
