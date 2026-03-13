@@ -1066,6 +1066,8 @@ Adding a new language (e.g. French `fr`) later: (1) add locale to `app.query.sup
 
 ## 23. Ingestion ledger and classification-help flow
 
+**Required capabilities (R1–R7):** Ledger, dashboard/ledger endpoint, store LLM reasoning, LLM classification fallback, preflight, virtual threads, and hash-based skip are **required** (not optional). They are tracked in the [implementation-plan.md Required capabilities — tracking table](./implementation-plan.md#required-capabilities--tracking-table) and delivered in iterations 6, 9, and 11.
+
 The pipeline returns per-request results (ingested / skipped / failed) for each file. To **track which documents were ingested and which weren’t** over time, and to **help you classify files and decide next steps**, the design adds an **ingestion ledger** and a **classification-help** (preflight) flow.
 
 ### 23.1 Ingestion ledger (persistent tracking)
@@ -1081,6 +1083,7 @@ An **ingestion ledger** stores a record for each file the system has seen (per d
 | `doc_type` | Assigned doc_type when status is `ingested`; null otherwise. |
 | `suggested_doc_type` | Optional; set when classification was run but file was not ingested (e.g. rejected type) or when confidence is low. |
 | `next_steps` | Optional; short actionable suggestion (see § 23.3). |
+| `llm_reasoning` | Optional; when an LLM was used (e.g. classification fallback, or extraction), store the model’s reasoning so you can track how decisions were taken (see § 23.5). |
 | `run_id` | Optional; links to a batch or stream run. |
 | `created_at` | When the record was written. |
 
@@ -1132,11 +1135,25 @@ The **next_steps** field gives short, actionable guidance so you can understand 
 
 These messages can be generated from a small rule set keyed by `status` and `reason` (or by phase: reject, parse, classify, store) so the engine remains config-driven.
 
+### 23.5 Storing LLM reasoning (track how decisions are taken)
+
+To **track how decisions are taken** by LLMs, the system can **store the reasoning** returned by the model (when the model is prompted to include it). This supports auditing, debugging, and improving prompts or rules.
+
+| Where LLM is used | What to store | Where it is stored | Flag |
+|-------------------|---------------|--------------------|------|
+| **Classification (LLM fallback)** | The model’s short reasoning for choosing a doc_type (e.g. “Document contains sections on experience, education, skills; matches resume.”) | **Ingestion ledger** field `llm_reasoning` (per file). Only when LLM fallback was used and the prompt asks for reasoning + doc_type. | `app.ingest.store-llm-reasoning` or `app.ingestion.ledger.store-llm-reasoning` (default `false`). When `true`, prompt the classifier LLM to return both doc_type and a brief reasoning; parse and persist in the ledger. |
+| **Metadata extraction (LLM strategy)** | Per-field or aggregate reasoning from the LLM (if the extraction prompt asks for it). | Option A: in **segment metadata** JSONB (e.g. `extraction_reasoning` or per-field `llm_reasoning_<field>`). Option B: in a separate **audit table** keyed by domain, source, field. | Same flag or per-domain `store-llm-reasoning` in domain YAML. Optional; only when extraction uses LLM and prompt returns reasoning. |
+| **Guardrails (llm-block)** | The model’s block reason/message (why the query was blocked). | **Query response** (blocked result already includes a message). Optionally persist in **feedback/audit** store for analytics. | No extra flag; block message is part of the API response; optional persistence in feedback store. |
+| **Query answer generation** | Chain-of-thought or explainability (why the answer was generated from which chunks). | **Explainability** fields in the query API response (e.g. retrieved segment ids, scores). Optional: store in feedback or audit when feedback is submitted. | Already in scope via explainability JSON; optional “store query reasoning” for audit. |
+
+**Recommendation:** Enable **storing LLM reasoning** only when you need to audit or tune decisions. Use the flag so it can be turned **on** or **off** (default off to avoid storing verbose text and to reduce storage). Ensure stored reasoning does not include PII (see security rules); prompt the LLM to return short, non-PII reasoning only.
+
 ### 23.4 Summary
 
 | Capability | Purpose |
 |------------|---------|
 | **Ingestion ledger** | Persistent record per file: ingested vs rejected/skipped/failed, with reason, optional suggested_doc_type, next_steps. Query via `GET .../ingestion/ledger` to see what was ingested and which don’t. |
+| **Storing LLM reasoning** | When flag on, store model reasoning for classification (and optionally extraction) so you can track how decisions were taken (§ 23.5). |
 | **Preflight (classify-only)** | Understand document type and next steps without ingesting; useful for unsupported types (e.g. JPEG resume) or to confirm classification before full ingest. |
 | **next_steps** | Short, actionable text so you know what to do next (add extension, enable OCR, fix file, confirm doc_type, etc.). |
 

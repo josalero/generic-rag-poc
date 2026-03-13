@@ -9,7 +9,7 @@ A **configuration-driven RAG platform** for ingesting and querying documents acr
 | Document | Description |
 |----------|--------------|
 | [technical-design.md](./technical-design.md) | Master architecture: domain YAML, ingestion/query flow, API, embedding store, languages (en/es), ingestion ledger & classification-help |
-| [implementation-plan.md](./implementation-plan.md) | Testable iterations, quality gates, dependencies, optional iterations |
+| [implementation-plan.md](./implementation-plan.md) | Testable iterations, quality gates, required capabilities (R1–R7) tracking table, optional iterations (A–D) |
 | [framework-code.md](./framework-code.md) | Java code samples and interfaces for each iteration |
 | [ingestion-pipeline.md](./ingestion-pipeline.md) | Ingestion phases (accept → parse → classify → extract → split → embed → store), ledger, preflight |
 | [query-pipeline.md](./query-pipeline.md) | Query flow: term extraction, retrieval, rerank, answer generation |
@@ -49,6 +49,8 @@ Each step has a **dedicated iteration doc** under [iterations/](./iterations/) w
 | 12 | Auto-configuration & wiring (prod/dev profiles) | [iteration-12-auto-configuration-wiring.md](./iterations/iteration-12-auto-configuration-wiring.md) |
 | 13 | Production hardening (exception handling, validation, health) | [iteration-13-production-hardening.md](./iterations/iteration-13-production-hardening.md) |
 
+**Required capabilities (R1–R7):** Ingestion ledger, dashboard/ledger endpoint, store LLM reasoning, LLM classification fallback, preflight, virtual threads, and hash-based skip are **required** (delivered in iterations 6, 9, 11). See the [implementation-plan Required capabilities — tracking table](./implementation-plan.md#required-capabilities--tracking-table).
+
 ### Optional iterations (after core 13)
 
 | Id | Goal | Reference |
@@ -57,8 +59,6 @@ Each step has a **dedicated iteration doc** under [iterations/](./iterations/) w
 | **B** | Feedback API (HITL: query + ingestion) | [technical-design § 19](./technical-design.md#19-human-in-the-loop-and-feedback) |
 | **C** | Hot-reload domains | Admin reload endpoint |
 | **D** | SSE ingest progress | Ingest stream endpoint |
-| **E** | Ingestion ledger + classification-help + **dashboard/endpoint** (what was ingested, what wasn’t, with reason) | [technical-design § 23](./technical-design.md#23-ingestion-ledger-and-classification-help-flow), [ingestion-pipeline § 17](./ingestion-pipeline.md#17-ingestion-ledger-and-classification-help) |
-| **F** | LLM classification fallback (flag on/off) | [technical-design § 9.1](./technical-design.md#91-optional-llm-based-classification-fallback) — when enabled, use LLM to suggest doc_type when fallback rule would apply |
 
 ---
 
@@ -67,15 +67,16 @@ Each step has a **dedicated iteration doc** under [iterations/](./iterations/) w
 - **OpenRouter only** — All LLM and embedding API access via OpenRouter (no direct provider clients).
 - **Languages** — English and Spanish for stop words, query language, and answer generation; extensible.
 - **Config over hardcoding** — Stop words, classification rules, extraction patterns, models, prompts, and parsers come from YAML/config; guardrails remain YAML-defined.
-- **Classification** — Rule-based (filename + content keywords) by default; **optional LLM fallback** when a flag is on (per app or per domain) to suggest doc_type when the fallback rule would apply.
-- **Ingestion ledger & classification-help** — Persistent ledger of ingested vs rejected/skipped/failed per file; preflight (classify-only) and `next_steps` to guide users (e.g. add file type, enable OCR).
+- **Classification** — Rule-based (filename + content keywords) by default; **LLM classification fallback** (required, flag on/off) to suggest doc_type when the fallback rule would apply.
+- **Ingestion ledger & classification-help** — **Required:** persistent ledger, GET ledger endpoint (what was ingested and what wasn't, with reason), preflight (classify-only), virtual threads, hash-based skip. See [implementation-plan Required capabilities](./implementation-plan.md#required-capabilities--tracking-table).
+- **Store LLM reasoning** — **Required** (flag on/off, default off) to store the model’s reasoning in the ledger; exposed in GET ledger when enabled.
 
 ---
 
 ## How to implement
 
-1. Read [technical-design.md](./technical-design.md) for architecture and [implementation-plan.md](./implementation-plan.md) for iteration order and gates.
-2. Start with [iterations/iteration-00-quality-gates.md](./iterations/iteration-00-quality-gates.md), then implement [iteration-01-foundation.md](./iterations/iteration-01-foundation.md) through iteration 13 in order.
+1. Read [technical-design.md](./technical-design.md) for architecture and [implementation-plan.md](./implementation-plan.md) for iteration order, quality gates, and the **required capabilities (R1–R7)** tracking table.
+2. Start with [iterations/iteration-00-quality-gates.md](./iterations/iteration-00-quality-gates.md), then implement [iteration-01-foundation.md](./iterations/iteration-01-foundation.md) through iteration 13 in order. Ledger, ledger endpoint, store LLM reasoning, LLM classification fallback, preflight, virtual threads, and hash-based skip are required (see tracking table).
 3. Use the corresponding iteration doc as the single source for that slice; [framework-code.md](./framework-code.md) supplies the code to implement.
 4. Run quality gates after each iteration: build, tests, coverage, and **Checkstyle, SpotBugs, PMD** (no violations). Before submitting or pushing, run `mvn verify` or `./gradlew check` / `./gradlew build`. Fix any violations before considering the change done. Sonar runs in CI with `-Dsonar.skip=false`; locally skipped by default. See [iteration-00-quality-gates.md](./iterations/iteration-00-quality-gates.md) and Cursor rule **quality-gates**.
-5. Optionally add iterations A–F (override, feedback, reload, SSE, ingestion ledger + preflight, LLM classification fallback) after the core 13.
+5. Optionally add iterations A–D (override, feedback, reload, SSE) after the core 13; required capabilities (R1–R7) are included in core iterations 6, 9, 11.

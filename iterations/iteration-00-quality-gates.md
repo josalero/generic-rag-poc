@@ -4,6 +4,8 @@
 
 These gates apply to **every iteration** before merge. They keep the codebase buildable, tested, and maintainable.
 
+**Required capabilities (R1–R7):** Ledger, dashboard/ledger endpoint, store LLM reasoning, LLM classification fallback, preflight, virtual threads, and hash-based skip are **required** and tracked in the [implementation-plan Required capabilities — tracking table](../implementation-plan.md#required-capabilities--tracking-table). They are delivered in iterations 6, 9, and 11. The same quality gates apply; the relevant iteration docs state acceptance criteria and tests.
+
 ## 1.1 Build & test
 
 | Gate | Requirement | How to verify |

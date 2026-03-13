@@ -20,6 +20,7 @@ Load domain YAML from a path, build a `ConfigDrivenRagDomain` with classifier, p
 
 - Loader reads YAML from classpath or file path; builds at least one `RagDomain` with correct `domainId`, `supportedFileTypes`, `chunkSize`, `chunkOverlap`.
 - Classifier: priority-ordered rules; filename + content keywords; first match wins; fallback rule.
+- **Optional LLM classification fallback (optional F):** When `app.ingest.classification.llm-fallback-enabled` or domain `classification.llm-fallback-enabled` is true and the matching rule is the **fallback rule**, the classifier may call an LLM to suggest doc_type (and optionally reasoning). When **store-llm-reasoning** is on (optional G), return or expose reasoning so the ingestion service can persist it in the ledger. See [technical-design.md § 9.1](../technical-design.md#91-optional-llm-based-classification-fallback) and [§ 23.5](../technical-design.md#235-storing-llm-reasoning-track-how-decisions-are-taken).
 - Guardrail evaluator: evaluates rules in order; first block wins.
 - Prompt provider: returns query and fallback template from YAML.
 
@@ -28,6 +29,14 @@ Load domain YAML from a path, build a `ConfigDrivenRagDomain` with classifier, p
 - `DomainDefinitionLoaderTest`: load a minimal domain YAML (e.g. one doc_type, one classification rule, one guardrail, one prompt); assert domain id, classifier classifies a sample text to expected doc_type, guardrail blocks/permits sample queries, prompt provider returns expected template.
 - `ConfigDrivenDocumentClassifierTest`: given a list of rules (e.g. from map), assert first matching rule's doc_type returned; fallback when no rule matches.
 - `ConfigDrivenGuardrailEvaluatorTest`: given list of term/pattern rules, assert blocked when query matches, passed when not.
+- When R4 (LLM classification fallback) is implemented: test that with flag on and fallback rule matching, classifier calls LLM and returns doc_type (and optionally reasoning when R3 is on).
+
+## Required capabilities delivered here (see [implementation-plan tracking table](../implementation-plan.md#required-capabilities--tracking-table))
+
+| Id | Capability | Taken into account in this iteration |
+|----|------------|--------------------------------------|
+| **R4** | LLM classification fallback | Classifier is the extension point; when fallback rule matches and flag is on, call LLM and return doc_type (and optionally reasoning for R3). |
+| **R3** | Store LLM reasoning | Classifier/loader should support returning or accepting reasoning when store-llm-reasoning is on so it can be persisted in the ledger (iteration 9/11). |
 
 ## Quality gates
 

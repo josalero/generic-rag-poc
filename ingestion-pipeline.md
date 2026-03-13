@@ -844,6 +844,7 @@ app:
     virtual-threads-enabled: ${INGEST_VIRTUAL_THREADS_ENABLED:true}
     classification:
       llm-fallback-enabled: ${INGEST_CLASSIFICATION_LLM_FALLBACK_ENABLED:false}   # when true, use LLM to suggest doc_type when fallback rule would apply
+    store-llm-reasoning: ${INGEST_STORE_LLM_REASONING:false}   # when true, store LLM reasoning in ledger (classification, optionally extraction) to track how decisions were taken
     llm-enrichment:
       enabled: ${INGEST_LLM_ENRICHMENT_ENABLED:true}
       max-chars: ${INGEST_LLM_ENRICHMENT_MAX_CHARS:8000}
@@ -872,7 +873,7 @@ See [technical-design.md § 23](./technical-design.md#23-ingestion-ledger-and-cl
 
 To understand **what was ingested and what wasn’t, with a reason** for each file, use the **ledger endpoint** and optionally a **dashboard**:
 
-- **Endpoint:** `GET /api/v1/{domainId}/ingestion/ledger` with optional query params: `status` (ingested | rejected | skipped | failed), `since` (ISO-8601 date), `limit`, `offset`. Response: list of entries with `source`, `status`, `reason`, `doc_type`, `next_steps`, `created_at`. This is the single API for reporting.
+- **Endpoint:** `GET /api/v1/{domainId}/ingestion/ledger` with optional query params: `status` (ingested | rejected | skipped | failed), `since` (ISO-8601 date), `limit`, `offset`. Response: list of entries with `source`, `status`, `reason`, `doc_type`, `next_steps`, optional `llm_reasoning` (when stored), `created_at`. This is the single API for reporting.
 - **Dashboard:** A dashboard (or admin UI) can call this endpoint and display a table with columns **Source**, **Status**, **Reason**, **Doc type**, **Next steps**, **Created at**, with filters by status and date. The dashboard is any UI that consumes the ledger GET; an optional iteration can deliver a minimal static page or SPA.
 
 See [technical-design.md § 23.1](./technical-design.md#231-ingestion-ledger-persistent-tracking) for the full API contract (query params, response shape).
@@ -890,6 +891,8 @@ When `app.ingestion.ledger.enabled` is true, the orchestrator writes a **ledger 
 | **Ingested** (after Phase 9) | Success | `status: ingested`, `doc_type`, optional `next_steps` (e.g. "Use feedback API to correct doc_type if needed") |
 
 **Write points:** (1) After Phase 1 if rejected; (2) after Phase 2 if parse fails; (3) after Phase 4/6 if skipped (e.g. duplicate); (4) after Phase 9 on success; (5) on any unhandled exception (failed). The ledger key is `(domain_id, source)` where `source` is the filename or content-based id used for idempotency.
+
+**Storing LLM reasoning:** When `app.ingest.store-llm-reasoning` (or `app.ingestion.ledger.store-llm-reasoning`) is **on**, the pipeline stores the LLM’s reasoning in the ledger field `llm_reasoning` whenever an LLM was used (e.g. classification fallback). The classification prompt should ask for a short reasoning plus doc_type; parse and persist so you can track how decisions were taken. Default is **off**. See [technical-design.md § 23.5](./technical-design.md#235-storing-llm-reasoning-track-how-decisions-are-taken).
 
 **API (dashboard/report):** `GET /api/v1/{domainId}/ingestion/ledger` with optional `?status=rejected&since=2026-03-01&limit=100&offset=0` returns ledger entries so you can see which documents were ingested and which weren’t, with reasons and next_steps.
 

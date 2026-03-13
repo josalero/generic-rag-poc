@@ -6,6 +6,20 @@ This document breaks the proposed framework into **testable iterations** with **
 
 **Iteration docs:** Each iteration has a dedicated document under [iterations/](./iterations/) that contains the **goal**, **deliverables**, **acceptance criteria**, **tests to add**, **quality gates**, and **code** for that iteration. Use the iteration doc as the single source for implementing that slice. The table below links to each.
 
+### Required capabilities — tracking table
+
+The following capabilities are **required** and are tracked by iteration. Each row is a requirement; the iteration that delivers it is responsible for acceptance criteria and tests.
+
+| # | Required capability | Description | Delivered in iteration | Acceptance criteria / tests |
+|---|---------------------|-------------|------------------------|-----------------------------|
+| R1 | **Ingestion ledger** | Persist a record per file (domain, source, status, reason, next_steps, optional llm_reasoning) so ingestion outcomes can be queried. | **9** — Ingestion service | Service writes ledger entry on every outcome (ingested, rejected, skipped, failed). Configurable via `app.ingestion.ledger.enabled`. See [§ 11](#11-iteration-9--ingestion-service), [iteration-09](./iterations/iteration-09-ingestion-service.md). |
+| R2 | **Dashboard / ledger endpoint** | GET endpoint to see what was ingested and what wasn’t, with reason. Supports dashboard or report consumers. | **11** — REST controllers | GET `/api/v1/{domainId}/ingestion/ledger` with query params `status`, `since`, `limit`, `offset`. Response: entries (source, status, reason, doc_type, next_steps, llm_reasoning, created_at). See [§ 13](#13-iteration-11--rest-controllers), [iteration-11](./iterations/iteration-11-rest-controllers.md). |
+| R3 | **Store LLM reasoning** | When flag on, store the LLM’s reasoning (e.g. for classification or extraction) so decisions can be tracked. | **9** (persist in ledger), **11** (expose in API) | `app.ingest.store-llm-reasoning` (default false). When on, ledger entry includes `llm_reasoning` when an LLM was used. GET ledger returns it. See [technical-design § 23.5](./technical-design.md#235-storing-llm-reasoning-track-how-decisions-are-taken). |
+| R4 | **LLM classification fallback** | Optional path: when fallback rule would apply, call LLM to suggest doc_type (flag on/off). | **6** — Config-driven engine | `app.ingest.classification.llm-fallback-enabled` or domain `classification.llm-fallback-enabled`. When on and fallback rule matches, call LLM; return doc_type (and reasoning when R3 is on). See [§ 8](#8-iteration-6--config-driven-engine-yaml-loader--classifier-prompts-guardrails), [iteration-06](./iterations/iteration-06-config-driven-engine.md). |
+| R5 | **Preflight (classify-only) endpoint** | POST endpoint to classify a file without ingesting; returns suggested_doc_type and next_steps. | **11** — REST controllers | POST `/api/v1/{domainId}/ingest/preflight` (multipart file). Returns suggested_doc_type, next_steps (and optional reasoning when R3 on). See [technical-design § 23.2](./technical-design.md#232-classification-help-flow-preflight--classify-only). |
+| R6 | **Virtual threads for ingestion** | Ingestion runs on virtual threads (per file, configurable). | **9** — Ingestion service | Batch/folder ingest use virtual threads; `app.ingest.virtual-threads-enabled` (default true). See [§ 11](#11-iteration-9--ingestion-service). |
+| R7 | **Hash-based skip (repeat runs)** | Track content hash; skip full pipeline when same source has same hash to save resources. | **9** — Ingestion service | After parse, compute content_hash; if stored record has same hash for (domain_id, source), skip extract/embed/store; record skip. See [§ 11.2.1](#1121-running-ingestion-multiple-times-tracking--hash-based-skip). |
+
 | Iteration | Document |
 |-----------|----------|
 | Quality gates (all) | [iteration-00-quality-gates.md](./iterations/iteration-00-quality-gates.md) |
@@ -34,22 +48,23 @@ This document breaks the proposed framework into **testable iterations** with **
 ## Table of Contents
 
 1. [Quality Gates](#1-quality-gates)
-2. [Iteration Dependencies](#2-iteration-dependencies)
-3. [Iteration 1 — Foundation (interfaces, records, registry)](#3-iteration-1--foundation-interfaces-records-registry)
-4. [Iteration 2 — Config & model registry](#4-iteration-2--config--model-registry)
-5. [Iteration 3 — Extraction strategies (no LLM)](#5-iteration-3--extraction-strategies-no-llm)
-6. [Iteration 4 — Guardrail rules (deterministic)](#6-iteration-4--guardrail-rules-deterministic)
-7. [Iteration 5 — Document parsers](#7-iteration-5--document-parsers)
-8. [Iteration 6 — Config-driven engine (YAML loader + classifier, prompts, guardrails)](#8-iteration-6--config-driven-engine-yaml-loader--classifier-prompts-guardrails)
-9. [Iteration 7 — Config-driven metadata + LLM strategy](#9-iteration-7--config-driven-metadata--llm-strategy)
-10. [Iteration 8 — LLM guardrail rule](#10-iteration-8--llm-guardrail-rule)
-11. [Iteration 9 — Ingestion service](#11-iteration-9--ingestion-service)
-12. [Iteration 10 — Query service](#12-iteration-10--query-service)
-13. [Iteration 11 — REST controllers](#13-iteration-11--rest-controllers)
-14. [Iteration 12 — Auto-configuration & wiring](#14-iteration-12--auto-configuration--wiring)
-15. [Iteration 13 — Production hardening](#15-iteration-13--production-hardening)
-16. [Environment setup (dev vs prod)](#16-environment-setup-dev-vs-prod)
-17. [Optional iterations](#17-optional-iterations)
+2. [Required capabilities — tracking table](#required-capabilities--tracking-table) (R1–R7)
+3. [Iteration Dependencies](#2-iteration-dependencies)
+4. [Iteration 1 — Foundation (interfaces, records, registry)](#3-iteration-1--foundation-interfaces-records-registry)
+5. [Iteration 2 — Config & model registry](#4-iteration-2--config--model-registry)
+6. [Iteration 3 — Extraction strategies (no LLM)](#5-iteration-3--extraction-strategies-no-llm)
+7. [Iteration 4 — Guardrail rules (deterministic)](#6-iteration-4--guardrail-rules-deterministic)
+8. [Iteration 5 — Document parsers](#7-iteration-5--document-parsers)
+9. [Iteration 6 — Config-driven engine (YAML loader + classifier, prompts, guardrails)](#8-iteration-6--config-driven-engine-yaml-loader--classifier-prompts-guardrails)
+10. [Iteration 7 — Config-driven metadata + LLM strategy](#9-iteration-7--config-driven-metadata--llm-strategy)
+11. [Iteration 8 — LLM guardrail rule](#10-iteration-8--llm-guardrail-rule)
+12. [Iteration 9 — Ingestion service](#11-iteration-9--ingestion-service)
+13. [Iteration 10 — Query service](#12-iteration-10--query-service)
+14. [Iteration 11 — REST controllers](#13-iteration-11--rest-controllers)
+15. [Iteration 12 — Auto-configuration & wiring](#14-iteration-12--auto-configuration--wiring)
+16. [Iteration 13 — Production hardening](#15-iteration-13--production-hardening)
+17. [Environment setup (dev vs prod)](#16-environment-setup-dev-vs-prod)
+18. [Optional iterations](#17-optional-iterations)
 
 ---
 
@@ -328,7 +343,7 @@ flowchart TD
 ### 8.2 Acceptance criteria
 
 - Loader reads YAML from classpath or file path; builds at least one `RagDomain` with correct `domainId`, `supportedFileTypes`, `chunkSize`, `chunkOverlap`.
-- Classifier: priority-ordered rules; filename + content keywords; first match wins; fallback rule. **Optional LLM fallback:** when `app.ingest.classification.llm-fallback-enabled` or domain `classification.llm-fallback-enabled` is true and the matching rule is the fallback rule, call LLM to suggest doc_type; use returned doc_type or keep fallback on failure. When flag is false (default), classification is rule-only. See [technical-design.md § 9.1](./technical-design.md#91-optional-llm-based-classification-fallback).
+- Classifier: priority-ordered rules; filename + content keywords; first match wins; fallback rule. **Optional LLM fallback (optional F):** when `app.ingest.classification.llm-fallback-enabled` or domain `classification.llm-fallback-enabled` is true and the matching rule is the fallback rule, call LLM to suggest doc_type (and optionally reasoning for optional G). When flag is false (default), classification is rule-only. See [technical-design.md § 9.1](./technical-design.md#91-optional-llm-based-classification-fallback) and [iteration-06](./iterations/iteration-06-config-driven-engine.md) Optional follow-ups.
 - Guardrail evaluator: evaluates rules in order; first block wins.
 - Prompt provider: returns query and fallback template from YAML.
 
@@ -421,6 +436,7 @@ flowchart TD
 - Sanitization: null bytes, Unicode NFC, whitespace (as in ingestion-pipeline.md).
 - Re-ingestion: delete existing segments by source filename before storing new ones.
 - **Running the process multiple times:** When ingestion is run repeatedly (e.g. folder ingest on a schedule), the system must support **tracking what was ingested** and **skipping unchanged files** to save resources. After parse (and sanitize), compute a **content hash** (e.g. SHA-256 of normalized text); if a record exists for the same `(domain_id, source)` with the same content hash (e.g. in the ingestion ledger or in store metadata), **skip** the expensive steps (extract, split, embed, store) and record a skip (e.g. ledger status `skipped`, reason `"Unchanged (same content hash)"`). Only **new files** (no prior record for source) or **updated files** (different content hash) go through the full pipeline. See [§ 11.2.1 Running ingestion multiple times](#1121-running-ingestion-multiple-times-tracking--hash-based-skip) and [ingestion-pipeline.md § 13 Deduplication](./ingestion-pipeline.md#13-deduplication).
+- **Ledger and store LLM reasoning (optional E, G):** When the ingestion ledger is implemented (optional E), the service writes a ledger entry per file (status, reason, next_steps, optional `llm_reasoning`). When `app.ingest.store-llm-reasoning` is on (optional G), persist the LLM’s reasoning when an LLM was used (e.g. classification fallback). See [iteration-09](./iterations/iteration-09-ingestion-service.md) Optional follow-ups and [technical-design.md § 23, § 23.5](./technical-design.md#23-ingestion-ledger-and-classification-help-flow).
 
 ### 11.2.1 Running ingestion multiple times (tracking & hash-based skip)
 
@@ -487,6 +503,7 @@ When you run the ingestion process **several times** (e.g. batch folder ingest d
 - Ingest: POST multipart file(s), return 200 with summary or 404/422 for unknown domain / unsupported type.
 - Query: POST JSON body (question, optional params), return 200 with answer + results or 404 for unknown domain; guardrail blocked → 200 with blocked payload or 403 as designed.
 - Admin: GET domains, GET doc-types for domain, POST reload (optional); appropriate auth/roles as per design.
+- **Ledger and dashboard (optional E):** When implemented, GET `/api/v1/{domainId}/ingestion/ledger` (query params: status, since, limit, offset) and optionally POST preflight; response includes entries with optional llm_reasoning (optional G). See [iteration-11](./iterations/iteration-11-rest-controllers.md) Optional follow-ups and [technical-design.md § 23](./technical-design.md#23-ingestion-ledger-and-classification-help-flow).
 
 ### 13.3 Tests to add
 
@@ -636,7 +653,7 @@ Full model and limitation details: [model-recommendations.md](./model-recommenda
 
 ## 17. Optional iterations
 
-These can be scheduled after the core 13 iterations.
+These can be scheduled after the core 13 iterations. **Required capabilities** (ingestion ledger, dashboard/ledger endpoint, store LLM reasoning, LLM classification fallback, preflight, virtual threads, hash-based skip) are **required** and tracked in the [Required capabilities — tracking table](#required-capabilities--tracking-table); they are delivered in iterations 6, 9, and 11.
 
 | Iteration | Goal | Framework reference | Tests |
 |-----------|------|---------------------|--------|
@@ -644,8 +661,7 @@ These can be scheduled after the core 13 iterations.
 | **Optional B** | Feedback API (HITL) | [technical-design.md § 19](./technical-design.md#19-human-in-the-loop-and-feedback) | Controller tests for POST feedback/query and feedback/ingestion; service/repository tests. |
 | **Optional C** | Hot-reload domains | Admin reload endpoint | Test: load second YAML or change, call reload, assert registry updated. |
 | **Optional D** | SSE ingest progress | Ingest stream endpoint | Test: MockMvc SSE client or similar; expect events. |
-| **Optional E** | Ingestion ledger + classification-help + **dashboard/endpoint** | [technical-design.md § 23](./technical-design.md#23-ingestion-ledger-and-classification-help-flow), [ingestion-pipeline.md § 17](./ingestion-pipeline.md#17-ingestion-ledger-and-classification-help) | Ledger: persist per-file status (ingested/rejected/skipped/failed), reason, next_steps. **Endpoint:** GET ledger API so callers can see **what was ingested and what wasn’t, with reason** (query params: status, since, limit, offset). **Dashboard:** Optional UI that calls this endpoint and shows a table (Source, Status, Reason, Doc type, Next steps, Created at) with filters. Preflight: POST preflight (classify-only). Tests: ledger write on each outcome, GET with filters; preflight next_steps. |
-| **Optional F** | LLM classification fallback (flag on/off) | [technical-design.md § 9.1](./technical-design.md#91-optional-llm-based-classification-fallback), [ingestion-pipeline.md Phase 4](./ingestion-pipeline.md#6-phase-4--classify) | When fallback rule matches and `app.ingest.classification.llm-fallback-enabled` or domain `classification.llm-fallback-enabled` is true, call LLM to suggest doc_type; otherwise rule-only. Tests: flag off → no LLM call; flag on + fallback rule → mock LLM called, doc_type from response. |
+
 
 ---
 
@@ -667,6 +683,7 @@ These can be scheduled after the core 13 iterations.
 | 12 | Auto-config, wiring, prod/dev profiles | SpringBootTest (prod + dev profile) |
 | 13 | Exception handling, validation, health | Unit + controller |
 | — | **Env reference** | [§ 16 Environment setup (dev vs prod)](#16-environment-setup-dev-vs-prod) |
-| Optional | Override, feedback, reload, SSE | Per feature |
+| — | **Required capabilities (R1–R7)** | See [Required capabilities — tracking table](#required-capabilities--tracking-table) (ledger, endpoint, store LLM reasoning, LLM classification fallback, preflight, virtual threads, hash-based skip). |
+| Optional | Override (A), feedback (B), reload (C), SSE (D) | Per feature |
 
 Quality gates (build, tests, coverage, lint, no PII, meaningful assertions) apply to every iteration. Each iteration links to [framework-code.md](./framework-code.md) for the exact code to implement. When authoring domain YAML or adding extraction/guardrail logic, prefer **custom algorithms** (regex, keyword, composite, term/pattern guardrails) first; use LLM only where needed for quality — see [technical-design.md § 21](./technical-design.md#21-custom-algorithms-vs-llm).
