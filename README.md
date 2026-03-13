@@ -16,6 +16,7 @@ A **configuration-driven RAG platform** for ingesting and querying documents acr
 | [extraction-strategies.md](./extraction-strategies.md) | Regex, keyword, composite, LLM strategies and execution |
 | [domain-configuration-guide.md](./domain-configuration-guide.md) | How to author domain YAML (classification, metadata, guardrails, prompts) |
 | [model-recommendations.md](./model-recommendations.md) | OpenRouter models for prod/dev; embedding and chat |
+| [architecture-appendix.md](./architecture-appendix.md) | Open risks to address: partitioning, rate limits, embedding migrations, persistence decoupling |
 | [domain-definition-schema.json](./domain-definition-schema.json) | JSON Schema for domain YAML validation |
 | [examples/](./examples/) | Example domain YAMLs: `recruiting.yml`, `legal.yml` |
 
