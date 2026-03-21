@@ -1,6 +1,6 @@
 # Leather inventory agent (separate POC)
 
-This folder holds the **leather store inventory + agentic chat** design — a **different product** from the **generic multi-domain RAG** platform documented at the repository root.
+This folder holds the **leather store inventory + agentic chat** design — a **different product** from the **generic multi-domain RAG** platform documented at the repository root. The reference stack uses **Gradle (Groovy DSL)** and **Spring Boot 4.0.4** (see the design doc §5.A).
 
 | Document | Description |
 |----------|-------------|

@@ -208,15 +208,21 @@ Use a **controlled set of category codes** in `products.category` and in **embed
 
 ## 5. OpenRouter + LangChain4j
 
-Subsections **5.A–5.E** are stack setup (Gradle, YAML, beans). Subsections **5.1–5.8** describe behavior, diagrams, and image design.
+Subsections **5.A–5.E** are stack setup (**Gradle Groovy DSL**, YAML, beans). Subsections **5.1–5.8** describe behavior, diagrams, and image design.
 
-### 5.A Gradle dependencies
-```kotlin
+### 5.A Gradle dependencies (Groovy DSL)
+
+Use **`build.gradle`** and **`settings.gradle`** in **Groovy** (not `build.gradle.kts`). Example root `build.gradle`:
+
+```groovy
 plugins {
-    id("org.springframework.boot") version "4.0.4"
-    id("io.spring.dependency-management") version "1.1.7"
-    id("java")
+    id 'java'
+    id 'org.springframework.boot' version '4.0.4'
+    id 'io.spring.dependency-management' version '1.1.7'
 }
+
+group = 'com.example'
+version = '0.0.1-SNAPSHOT'
 
 java {
     toolchain {
@@ -224,25 +230,25 @@ java {
     }
 }
 
-group = "com.example"
-version = "0.0.1-SNAPSHOT"
-
 repositories {
     mavenCentral()
 }
 
+ext {
+    langchain4jVersion = '1.12.2' // core + open-ai; align with agentic line
+    langchain4jAgenticVersion = '1.12.2-beta22' // pre-release; pin until Agentic GA matches BOM
+}
+
 dependencies {
-    implementation("org.springframework.boot:spring-boot-starter-web")
-    implementation("org.springframework.boot:spring-boot-starter-actuator")
-    implementation("org.springframework.boot:spring-boot-starter-data-jpa")
-    implementation("org.springframework.boot:spring-boot-starter-validation")
-    val langchain4jVersion = "1.12.2" // core + open-ai; align with agentic line
-    val langchain4jAgenticVersion = "1.12.2-beta22" // pre-release; pin until Agentic GA matches BOM
-    implementation("dev.langchain4j:langchain4j:$langchain4jVersion")
-    implementation("dev.langchain4j:langchain4j-open-ai:$langchain4jVersion")
-    implementation("dev.langchain4j:langchain4j-pgvector:$langchain4jVersion") // RAG: §4.8
-    implementation("dev.langchain4j:langchain4j-agentic:$langchain4jAgenticVersion")
-    runtimeOnly("org.postgresql:postgresql")
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation "dev.langchain4j:langchain4j:${langchain4jVersion}"
+    implementation "dev.langchain4j:langchain4j-open-ai:${langchain4jVersion}"
+    implementation "dev.langchain4j:langchain4j-pgvector:${langchain4jVersion}" // RAG: §4.8
+    implementation "dev.langchain4j:langchain4j-agentic:${langchain4jAgenticVersion}"
+    runtimeOnly 'org.postgresql:postgresql'
 }
 ```
 
@@ -1209,7 +1215,7 @@ Notes:
 ### 14.1 Prerequisites
 - Java 25 JDK
 - PostgreSQL 14+ (local or Docker)
-- Gradle (or `./gradlew`)
+- Gradle **Groovy** build (`./gradlew` wrapper recommended)
 - Network access to OpenRouter API for **runtime**; the **demo kit (§19)** and **full agent + RAG** require a **live** key and DB. Mocks/stubs are **only** for **unit tests** or isolated dev — **not** for the stakeholder demo path.
 
 ### 14.2 Clone + configure environment
@@ -1332,7 +1338,7 @@ These gates apply **before merge** on **every** leather iteration (1–7), in ad
 
 | Area | What to build |
 |------|----------------|
-| **Project** | Gradle (Groovy) or Kotlin DSL; Java **25** toolchain; Spring Boot **4.0.4**; `settings.gradle`, root `build.gradle`, `src/main/resources/application.yml` with `local` / `render` (or `prod`) profiles |
+| **Project** | **Gradle Groovy DSL** (`build.gradle`, `settings.gradle`); Java **25** toolchain; Spring Boot **4.0.4**; `src/main/resources/application.yml` with `local` / `render` (or `prod`) profiles |
 | **Persistence** | Flyway `V1__initial_schema.sql`: tables **§6.1** (`products`, `product_variants`, `product_images`, `image_generation_jobs`, `agent_sessions`, `agent_messages`, `agent_handoffs`); indexes **§6.2**; `CREATE EXTENSION IF NOT EXISTS vector` + embedding store table aligned with [technical-design.md §11](../technical-design.md#11-embedding-store-schema) (metadata keys for `sku`, `variant_id`, `domain_id` / leather domain) |
 | **JPA** | Entities + repositories for `products`, `product_variants`, `product_images` (match §6 naming) |
 | **API** | `AgentController` `POST /api/agent/chat` + `ChatRequest` / `ChatResponse` DTOs (fields per §16.1: `responseText`, `usedTools`, `isHumanHandoff`, `items`) |

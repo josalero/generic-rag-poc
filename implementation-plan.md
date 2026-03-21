@@ -677,7 +677,7 @@ This § **18** is the **implementation-plan.md** mirror: what engineers must bui
 
 | Area | Requirement |
 |------|-------------|
-| Runtime | Java **25**, Spring Boot **4.0.4**, Gradle |
+| Runtime | Java **25**, Spring Boot **4.0.4**, **Gradle (Groovy DSL)** — `build.gradle` / `settings.gradle` |
 | Agent | LangChain4j **1.12.2** + **`langchain4j-agentic` `1.12.2-beta22`** — **`AgenticServices.agentBuilder()`** → **`UntypedAgent`**, `invokeWithAgenticScope` (design §5.D) |
 | Vector | **`langchain4j-pgvector`**, PostgreSQL **`CREATE EXTENSION vector`**, embedding table per [technical-design.md §11](./technical-design.md#11-embedding-store-schema) (metadata: `sku`, `variant_id`, leather `domain_id`) |
 | LLM / embed | OpenRouter **`ChatModel`**; **`EmbeddingModel`** **same** at ingest and query time for catalog chunks |
