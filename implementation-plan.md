@@ -4,6 +4,8 @@
 
 This document breaks the proposed framework into **testable iterations** with **quality gates**. Each iteration produces a shippable slice that can be verified by tests and keeps the codebase in a working state.
 
+**Leather inventory agent (separate product spec):** The **[Leather store inventory + Agentic chat](./leather-inventory-agent/diseno-agente-consultas-leather-openrouter.md)** design (CSV/XLSX ingest, **pgvector**, **RAG-first search** via `searchCatalogRag`, relational tools for **exact stock**, TOON, BFF embed widget, Spring Boot **4.0.4**, LangChain4j **1.12.2** + **agentic 1.12.2-beta22**) is tracked in **[§ 18 Leather inventory agent POC](#18-leather-inventory-agent-poc)** below. After core build, add the **demo kit** ([design §19](./leather-inventory-agent/diseno-agente-consultas-leather-openrouter.md#19-demo-kit-and-samples-product-showcase), **[§ 18.8](#188-demo-kit-and-samples)** here) — **live PostgreSQL + pgvector** and **live OpenRouter** for the showcase; no mocked LLM/DB on that path. Reuse **patterns** from generic iterations **9** (ingest/embed/store) and **10** (retrieve) for vector pipelines; leather-specific iterations are defined in the leather doc **§ 15**.
+
 **Iteration docs:** Each iteration has a dedicated document under [iterations/](./iterations/) that contains the **goal**, **deliverables**, **acceptance criteria**, **tests to add**, **quality gates**, and **code** for that iteration. Use the iteration doc as the single source for implementing that slice. The table below links to each.
 
 ### Required capabilities — tracking table
@@ -65,6 +67,7 @@ The following capabilities are **required** and are tracked by iteration. Each r
 16. [Iteration 13 — Production hardening](#15-iteration-13--production-hardening)
 17. [Environment setup (dev vs prod)](#16-environment-setup-dev-vs-prod)
 18. [Optional iterations](#17-optional-iterations)
+19. [Leather inventory agent POC](#18-leather-inventory-agent-poc)
 
 ---
 
@@ -662,6 +665,111 @@ These can be scheduled after the core 13 iterations. **Required capabilities** (
 | **Optional C** | Hot-reload domains | Admin reload endpoint | Test: load second YAML or change, call reload, assert registry updated. |
 | **Optional D** | SSE ingest progress | Ingest stream endpoint | Test: MockMvc SSE client or similar; expect events. |
 
+---
+
+## 18. Leather inventory agent POC
+
+**Canonical design (single source for behavior and iterations):** [diseno-agente-consultas-leather-openrouter.md](./leather-inventory-agent/diseno-agente-consultas-leather-openrouter.md) — objective, architecture (§3), components (§4), PostgreSQL model (§6), agent flow (§8), security, **TOON** (§17), **embeddable BFF widget** (§18), **demo kit** (§19), and **§ 15 Implementation plan with iterations** (leather weeks 1–4+).
+
+This § **18** is the **implementation-plan.md** mirror: what engineers must build and how it connects to the **generic RAG** iterations above.
+
+### 18.1 Stack (must match design doc)
+
+| Area | Requirement |
+|------|-------------|
+| Runtime | Java **25**, Spring Boot **4.0.4**, Gradle |
+| Agent | LangChain4j **1.12.2** + **`langchain4j-agentic` `1.12.2-beta22`** — **`AgenticServices.agentBuilder()`** → **`UntypedAgent`**, `invokeWithAgenticScope` (design §5.D) |
+| Vector | **`langchain4j-pgvector`**, PostgreSQL **`CREATE EXTENSION vector`**, embedding table per [technical-design.md §11](./technical-design.md#11-embedding-store-schema) (metadata: `sku`, `variant_id`, leather `domain_id`) |
+| LLM / embed | OpenRouter **`ChatModel`**; **`EmbeddingModel`** **same** at ingest and query time for catalog chunks |
+| Config | `APP_AGENT_TOON_ENABLED` (default on), `app.cors.*` only if browser calls Leather directly (BFF model: optional) |
+
+### 18.2 Data load: tables + pgvector (design §4.4, §4.8)
+
+| Step | Implementation note |
+|------|---------------------|
+| 1 | Parse **CSV/XLSX** (column mapping); validate types |
+| 2 | **Upsert** `products`, `product_variants`, `product_images` — **source of truth** for stock/price |
+| 3 | Build **text chunks** from rows (name + attributes + description); attach **metadata** for retrieval filters |
+| 4 | **Embed** + **store** in pgvector (`EmbeddingStoreIngestor` / `PgVectorEmbeddingStore` — same patterns as [§ 11 Iteration 9](#11-iteration-9--ingestion-service) and [ingestion-pipeline.md](./ingestion-pipeline.md) phases 7–9) |
+| 5 | Optional operator API: **`POST /api/admin/catalog/ingest`** (design §4.1) |
+
+**Reuse from generic RAG codebase:** embedding store schema, IVFFlat index strategy, virtual-thread batch patterns where applicable; **do not** assume PDF-only parsers — tabular ingest is a **dedicated ETL** (can live in `feature/catalog/ingest`).
+
+### 18.3 Agent tools and query policy (design §4.2–4.3, §5.4–5.5)
+
+| Policy | Detail |
+|--------|--------|
+| **RAG-first search** | Primary discovery tool: **`searchCatalogRag`** (pgvector + hybrid re-rank if desired — see [query-pipeline.md](./query-pipeline.md) Phase 4–5 patterns inside the tool implementation) |
+| **Supplementary** | **`searchProducts`** (SQL/keyword) only when the model chooses a structured filter path |
+| **Stock / price truth** | **`getStockByVariant`**, **`getStockBySku`**, **`getInventoryByMaterialSize`** — system prompt: **never** state a quantity from chunk text alone |
+| **Other tools** | Gallery, image generation, handoff — design §4.3 table |
+| **TOON** | Tabular tool outputs formatted per design **§17** when `app.agent.toon.enabled` is true |
+| **Spanish** | Response guardrails design **§9.4** |
+
+### 18.4 Embeddable chat widget (optional, design doc §18)
+
+| Item | Detail |
+|------|--------|
+| Model | **BFF / same-origin proxy** only — no secrets in browser bundle |
+| Client | `LeatherChat.mount`, `apiBase` → integrator host; `withCredentials` if session cookies |
+| Server | Leather **§18.6** CORS optional when all traffic is BFF → Leather server-to-server |
+| Schedule | Align with leather design **§ 15** iterations **6–7** |
+
+### 18.5 Mapping: leather design iterations → delivery focus
+
+Map PRs/milestones to [diseno § 15](./leather-inventory-agent/diseno-agente-consultas-leather-openrouter.md#15-implementation-plan-with-iterations):
+
+| Leather iteration | Delivery focus |
+|-------------------|----------------|
+| **1 — Foundation** | Spring Boot skeleton, Flyway, JPA entities, **`vector` extension** + embedding table migration, `/api/agent/chat` contract, Spanish guard, health |
+| **2 — Agent + tools** | **UntypedAgent** bean, **`searchCatalogRag`** + retriever, all **`@Tool`**s (stock, images, handoff), façade, TOON in tools, persistence |
+| **Spreadsheet + vector rebuild** | Prefer **within 1–2** or explicit split: CSV/XLSX job → upsert rows + **re-embed** / replace chunks by SKU |
+| **3 — Images** | `generateProductImage`, jobs, OpenRouter image client |
+| **4 — Render / ops** | Docker, metrics, rate limits, smoke tests |
+| **5 — Validation** | Spanish prompt matrix, runbook, data-quality checks |
+| **6–7 — Widget** | `web/leather-chat-widget`, BFF demo, minify, integrator README, optional Playwright |
+
+### 18.6 Tests and quality gates
+
+- Apply **[§ 1 Quality Gates](#1-quality-gates)** to the leather module.
+- **Unit / fast CI:** mock `ChatModel` / `EmbeddingModel` where appropriate; **no live OpenRouter** required on every PR; contract tests for DTOs and tool payloads.
+- **Integration tests (recommended, still CI-friendly):** Testcontainers PostgreSQL **with pgvector**; mock LLM/embed if you want deterministic CI — assert ingest → vectors → **`searchCatalogRag`** metadata → stock tool SQL-backed qty.
+- **Demo kit path ([§ 18.8](#188-demo-kit-and-samples), design §19):** the **stakeholder demo** is **not** mocked — **real PostgreSQL + pgvector**, **real OpenRouter** (`OPENROUTER_API_KEY`), and **real** embed/ingest for the showcase. Do not document or script a “fake assistant” for that path.
+
+### 18.7 PR traceability checklist (leather)
+
+Use in PR descriptions when touching the leather agent:
+
+- [ ] Relational schema + **pgvector** dimension matches **`EmbeddingModel`**
+- [ ] **`searchCatalogRag`** returns **`sku` / `variantId`** (or equivalent) for downstream stock tools
+- [ ] System prompt / agent instructions enforce **quantities only from stock tools**
+- [ ] Catalog ingest path documented (admin API or job) and idempotent where possible
+- [ ] If shipping embed: **BFF** documented; no API keys in client samples ([design §18](./leather-inventory-agent/diseno-agente-consultas-leather-openrouter.md#18-embeddable-chat-widget-vanilla-js--jquery))
+
+### 18.8 Demo kit and samples
+
+**Canonical detail:** [diseno-agente-consultas-leather-openrouter.md § 19](./leather-inventory-agent/diseno-agente-consultas-leather-openrouter.md#19-demo-kit-and-samples-product-showcase).
+
+When the leather app is **feature-complete enough to demo**, add artifacts so stakeholders can run a **repeatable showcase** without ad-hoc setup:
+
+| Deliverable | Purpose |
+|-------------|---------|
+| **`demo/README.md`** | Prerequisites, env vars, 2–3 commands to load sample data + start app |
+| **`demo/catalog/sample-catalog.csv`** (and optional `.xlsx`) | 10–30 fictional rows; columns match ETL; Spanish copy; placeholder image URLs |
+| **`demo/scripts/chat-smoke.sh`** | `curl` **POST `/api/agent/chat`** with Spanish prompts (align with design §5.5 / §8) |
+| **`demo/scripts/load-sample-data.sh`** | Seed DB and/or call **`POST /api/admin/catalog/ingest`** + vector rebuild instructions |
+| **`docs/DEMO.md`** | **5–10 minute** live script: API + optional widget + handoff example |
+| **`web/leather-chat-widget/embed-demo.html`** | Visual embed demo with BFF note (design §18) |
+| **Optional** | Postman collection under `demo/postman/`; `.env.example` (no secrets); **`demoVerify`** as **manual**, **staging**, or **`workflow_dispatch`/nightly** CI with secrets — **real** Postgres + **real** OpenRouter (see design §19.4); **not** a mocked LLM for the demo smoke |
+
+**Exit criteria (leather release / Iteration 5–7):** at least **`docs/DEMO.md`** + **`demo/README.md`** + one **sample catalog** file + **`chat-smoke.sh`** exercised against a **live** stack (**PostgreSQL + pgvector** + **OpenRouter**) on a clean machine or approved staging; PR CI may still use mocks for speed — the **documented demo** must be **end-to-end real**.
+
+**PR checklist (demo):**
+
+- [ ] Sample data contains **no real PII**; SKUs and names are fictional
+- [ ] `docs/DEMO.md` matches current endpoints and tool names (`searchCatalogRag`, stock tools)
+- [ ] Scripts use `localhost` defaults or document `BASE_URL` override
+- [ ] `.env.example` lists required vars; `.env` remains gitignored
 
 ---
 
@@ -685,5 +793,8 @@ These can be scheduled after the core 13 iterations. **Required capabilities** (
 | — | **Env reference** | [§ 16 Environment setup (dev vs prod)](#16-environment-setup-dev-vs-prod) |
 | — | **Required capabilities (R1–R7)** | See [Required capabilities — tracking table](#required-capabilities--tracking-table) (ledger, endpoint, store LLM reasoning, LLM classification fallback, preflight, virtual threads, hash-based skip). |
 | Optional | Override (A), feedback (B), reload (C), SSE (D) | Per feature |
+| **Leather POC** | Inventory agent, spreadsheet + pgvector, Agentic, RAG-first search, BFF widget, **demo kit** | [§ 18](#18-leather-inventory-agent-poc) + [§ 18.8](#188-demo-kit-and-samples) + [diseno §19](./leather-inventory-agent/diseno-agente-consultas-leather-openrouter.md#19-demo-kit-and-samples-product-showcase) |
 
 Quality gates (build, tests, coverage, lint, no PII, meaningful assertions) apply to every iteration. Each iteration links to [framework-code.md](./framework-code.md) for the exact code to implement. When authoring domain YAML or adding extraction/guardrail logic, prefer **custom algorithms** (regex, keyword, composite, term/pattern guardrails) first; use LLM only where needed for quality — see [technical-design.md § 21](./technical-design.md#21-custom-algorithms-vs-llm).
+
+**Leather inventory agent:** implement per **[§ 18](#18-leather-inventory-agent-poc)** and the leather design doc; reuse generic RAG **ingest/retrieve patterns** from iterations **9–10** where applicable.

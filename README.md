@@ -19,6 +19,10 @@ A **configuration-driven RAG platform** for ingesting and querying documents acr
 | [domain-definition-schema.json](./domain-definition-schema.json) | JSON Schema for domain YAML validation |
 | [examples/](./examples/) | Example domain YAMLs: `recruiting.yml`, `legal.yml` |
 
+### Separate product: leather inventory agent
+
+The **leather store** agentic chat POC (PostgreSQL + pgvector, OpenRouter, embeddable widget) is **not** the generic RAG platform. Its design and iterations live in **[`leather-inventory-agent/`](./leather-inventory-agent/README.md)**. Engineering handoff checklists still appear in [implementation-plan § 18](./implementation-plan.md#18-leather-inventory-agent-poc).
+
 ---
 
 ## Implementation Steps

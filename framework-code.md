@@ -2,7 +2,7 @@
 
 > Parent: [technical-design.md](./technical-design.md) · Related: [extraction-strategies.md](./extraction-strategies.md), [ingestion-pipeline.md](./ingestion-pipeline.md), [query-pipeline.md](./query-pipeline.md)
 
-All code targets **Java 25** and **Spring Boot 4.0** with **LangChain4j 1.11**.
+All code targets **Java 25** and **Spring Boot 4.0.4** with **LangChain4j 1.11**.
 
 **Code by iteration:** The same code is organized **per iteration** in [iterations/](./iterations/). Each iteration doc (e.g. [iteration-01-foundation.md](./iterations/iteration-01-foundation.md)) contains the plan details (goal, deliverables, acceptance criteria, tests, quality gates) plus the code for that slice. Use the iteration docs when implementing; use this file as a single reference or when you need to see the full codebase in one place.
 
@@ -2495,7 +2495,7 @@ public class DomainHealthIndicator implements HealthIndicator {
 ```groovy
 plugins {
     id 'java'
-    id 'org.springframework.boot' version '4.0.3'
+    id 'org.springframework.boot' version '4.0.4'
     id 'io.spring.dependency-management' version '1.1.6'
 }
 
@@ -2513,7 +2513,7 @@ ext {
 
 dependencyManagement {
     imports {
-        mavenBom "org.springframework.boot:spring-boot-dependencies:4.0.3"
+        mavenBom "org.springframework.boot:spring-boot-dependencies:4.0.4"
     }
 }
 

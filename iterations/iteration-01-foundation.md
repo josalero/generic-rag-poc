@@ -44,7 +44,7 @@ See [iteration-00-quality-gates.md](./iteration-00-quality-gates.md) for gates t
 
 ## Code — Core Abstractions (`feature/domain/`)
 
-All code targets **Java 25** and **Spring Boot 4.0** with **LangChain4j 1.11**.
+All code targets **Java 25** and **Spring Boot 4.0.4** with **LangChain4j 1.11**.
 
 ### Code 1.1 RagDomain
 
