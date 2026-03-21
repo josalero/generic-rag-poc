@@ -18,7 +18,7 @@
 12. [Compatibility notes](#12-compatibility-notes)
 13. [Technical specifications (for implementation)](#13-technical-specifications-for-implementation)
 14. [Local development setup](#14-local-development-setup)
-15. [Implementation plan with iterations](#15-implementation-plan-with-iterations)
+15. [Implementation plan with iterations](#15-implementation-plan-with-iterations) — **§15.0** baseline quality gates + Iterations **1–7** with deliverables, tests, and per-iteration **Q** gates
 16. [Sample code (POC)](#16-sample-code-poc)
 17. [TOON (Token-Oriented Object Notation)](#17-toon-token-oriented-object-notation)
 18. [Embeddable chat widget (vanilla JS / jQuery)](#18-embeddable-chat-widget-vanilla-js--jquery)
@@ -1301,148 +1301,278 @@ curl -X POST http://localhost:8080/api/agent/chat \
 
 **Repo-level tracking:** The same work is summarized for engineering handoff in **[implementation-plan.md § 18 — Leather inventory agent POC](../implementation-plan.md#18-leather-inventory-agent-poc)** (stack, ingest, tools, widget, test checklist, mapping to generic RAG iterations 9–10) and **[§ 18.8 — Demo kit](../implementation-plan.md#188-demo-kit-and-samples)**. Use **§ 15 below** for week-by-week detail; use **implementation-plan § 18–18.8** for cross-project checklists, PR traceability, and **post-build demo samples** (**§ 19**).
 
+---
+
+### 15.0 Quality gates — every iteration (baseline)
+
+These gates apply **before merge** on **every** leather iteration (1–7), in addition to the **iteration-specific** gates in each subsection below.
+
+| # | Gate | Requirement | How to verify |
+|---|------|-------------|----------------|
+| **G0.1** | **Build** | Clean compile | `./gradlew compileJava compileTestJava` (or `mvn compile test-compile`) |
+| **G0.2** | **Tests** | All automated tests green; **no** flaky network-dependent unit tests | `./gradlew test`; unit tests use mocks for `ChatModel` / OpenRouter unless the iteration explicitly requires live integration |
+| **G0.3** | **Static analysis** | No new Checkstyle / SpotBugs / PMD violations on changed code | `./gradlew check` (or team-equivalent); see [iteration-00-quality-gates.md](../iterations/iteration-00-quality-gates.md) §1.5 |
+| **G0.4** | **Coverage** | New production code has tests; target **≥ 80%** line coverage on **new** classes (team policy) | JaCoCo or review checklist |
+| **G0.5** | **Assertions** | Tests assert **outcomes** (returned DTO fields, DB state, mock invocations), not only “no exception” | Code review |
+| **G0.6** | **Secrets & PII** | No API keys, tokens, or customer PII in code, logs, or committed fixtures | Grep + review; env vars only for OpenRouter / DB |
+| **G0.7** | **Inventory truth** | Any iteration touching the agent or tools: **documented** rule that **stock/price** come **only** from SQL-backed tools, never from RAG chunks alone | Review system prompt + façade; see §4.8 |
+| **G0.8** | **PR hygiene** | PR title/body references **leather iteration number** and links **§ 15** or **implementation-plan § 18** | Review |
+
+**Optional but recommended (G0.9):** Integration test with **Testcontainers PostgreSQL + pgvector** (no live OpenRouter) for persistence and vector dimension smoke — especially from Iteration 2 onward.
+
+---
+
 ### Iteration 1 — Foundation (Week 1)
-- Scope: platform + data model + Spanish-only query loop.
-- Deliverables:
-- Deliverables:
-  - Create Spring Boot 4.0.4 skeleton with Java 25 and Gradle Groovy DSL (`build.gradle`, `settings.gradle`, `Dockerfile` baseline).
-  - Add Postgres schema and seed data from section 7 (`inventory_catalog`, `agent_sessions`, `agent_messages`).
-  - Implement domain entities and repositories for `products`, `product_variants`, `product_images`.
-  - Wire datasource + JPA + Flyway baseline and health endpoints.
-  - Implement `/api/agent/chat` controller contract and request/response DTOs.
-  - Add response language guardrail (`SpanishLanguageValidator`, fallback translation policy for non-Spanish).
-- Technical details:
-  - Classes: `LeatherInventoryAgentApplication`, `GlobalExceptionHandler`, `AgentController`, `LeatherInventoryChatFacade`, `ChatRequest`, `ChatResponse`, `LanguageGuard`.
-  - DB: create migration `V1__initial_schema.sql` with indexes from section 6.2.
-  - Config: `application.yml` profiles (`local`, `render`) and datasource pooling (`Hikari`).
-  - Validation: `jakarta.validation` for `sessionId` and `message`, max message size guardrail.
-- Exit criteria:
-  - 10+ inventory queries in Spanish answered with tool output.
-  - DB access stable in local environment.
-  - `/actuator/health` healthy.
 
-### Iteration 2 — Agent and tool orchestration (Week 1–2)
-- Scope: LangChain4j **1.12.2** + **Agentic (`langchain4j-agentic` `1.12.2-beta22`)** — **create the agent with `AgenticServices.agentBuilder()`** and inventory `@Tool`s.
-- Deliverables:
-- Deliverables:
-  - Add dependency **`langchain4j-agentic`** (version aligned with core — §5.A).
-  - Define **`UntypedAgent leatherInventoryAgent`** bean via **`AgenticServices.agentBuilder()...build()`** (§5.D).
-  - Implement **`LeatherTools`** (and related beans) with **`@Tool`** methods for stock by SKU, material, color, size, images, handoff as needed.
-  - Add **`LeatherInventoryChatFacade`** (or equivalent) calling **`leatherInventoryAgent.invokeWithAgenticScope(...)`**, `LanguageGuard`, and mapping to `ChatResponse` (handle **`ResultWithAgenticScope`** if returned).
-  - Add handoff logic for low confidence and unsupported intents (prompt + optional precheck; persist handoffs per §8).
-  - Add structured output objects: `usedTools`, `isHumanHandoff`, `items`, `reason` (populate tool metadata via **LangChain4j** listeners / hooks where supported in **1.12.2** / your pinned agentic build).
-- Technical details:
-  - LangChain4j wiring in `LlmConfig` with **`ChatModel`** (OpenRouter) for Agentic.
-  - **Do not** implement the primary tool loop as a custom `QueryRouter` + `switch`; the LLM selects tools through LangChain4j Agentic.
-  - Optional: lightweight **precheck** (regex/keyword) to short-circuit forbidden intents **before** `invokeWithAgenticScope` — not a replacement for `@Tool` orchestration.
-  - Repositories: `ProductRepository`, `ProductVariantRepository`.
-  - Conversation persistence per `sessionId` via PostgreSQL `agent_messages` (and optional scope hydration per Agentic docs).
-  - **`ToolResultToonFormatter`** (or equivalent) inside `@Tool` methods — **required by default** because `app.agent.toon.enabled` is true (§17); respect flag to emit JSON when disabled.
-- Exit criteria:
-  - End-to-end Spanish conversations for inventory-only questions.
-  - At least 2 handoff scenarios are correctly triggered and logged.
-  - With default TOON on, spot-check token usage vs JSON for the same inventory result set (logging/metrics); if quality suffers, prefer upgrading the chat model (§17.1) before disabling TOON.
+**Goal:** Runnable Spring Boot app, **relational schema + seed** per §6–§7, **`POST /api/agent/chat`** contract, and a **minimal** chat path (stub or single-purpose handler acceptable only if Iteration 2 replaces it with full Agentic — prefer **real `ChatModel` + placeholder agent** if schedule allows).
 
-### Iteration 3 — Image generation and storage path (Week 2)
-- Scope: item visual support for POC.
-- Deliverables:
-- Deliverables:
-  - Implement `generateProductImage` tool and `InventoryImageGenerationService`.
-  - Add `image_generation_jobs` + lifecycle (`PENDING`, `DONE`, `FAILED`, `TIMEOUT`).
-  - Add image storage strategy (initially `POSTGRES_BYTEA`) and retrieval API.
-  - Validate image references in response and enforce no image generation without explicit intent.
-- Technical details:
-  - New classes/services: `InventoryImageTools`, `OpenRouterImageClient`, `ImageProperties`, `ImageGenerationJob`, `ProductImage`.
-  - Add `InventoryImageGenerationService` with transaction boundaries, retry policy, idempotency key on `(sku, variant_sku, prompt_hash)`.
-  - Add OpenRouter image endpoint config via `LlmProperties.imageGeneration` section.
-  - Add asynchronous worker option (`@Async`) or scheduled poller depending on Render constraints.
-  - Guardrail checks: image rate limiter, template strict prompts, checksum validation (`sha256`) and MIME validation.
-- Data/Model:
-  - Extend table `product_images` with `image_ref_type`, `image_data` (`bytea`), `binary_metadata`.
-  - Job trace table field: `provider_job_id`, `error_code`, `attempt_count`.
-- Exit criteria:
-  - Image request in Spanish returns either stored binary reference or status fallback.
-  - `OPENROUTER` errors handled gracefully and retried according to guardrails.
+**Prerequisites:** JDK 25, PostgreSQL (local or Docker), `OPENROUTER_API_KEY` for local profile; Flyway enabled.
 
-### Iteration 4 — Render hardening and operations (Week 3)
-- Scope: deployment + reliability + guardrails.
-- Deliverables:
-  - Add Dockerfile and render deployment configuration.
-  - Add monitoring logs for tool invocations, latency, and failures.
-  - Add cost and abuse guardrails for generation.
-  - Add smoke tests for inventory and image scenarios.
-- Technical details:
-  - Multi-stage Docker build with BuildKit and JDK 25 toolchain.
-  - `render.yaml` service config with env vars, `healthCheckPath`, restart policy.
-  - Actuator endpoints: `/actuator/health`, optional `/actuator/prometheus`.
-  - Structured logs with `traceId`, `sessionId`, `toolName`, `duration_ms`, `llm_tokens_est`.
-  - Add `RateLimitingFilter` (per session + IP), `RetryTemplate`/`Resilience4J` for OpenRouter calls.
-  - Add metrics counters: `chat.requests.total`, `chat.requests.failed`, `tools.image.generated`.
-- Exit criteria:
-  - Render deployment runs end-to-end with Postgres service only.
-  - P95 latency and tool error metrics visible.
+**Deliverables**
 
-### Iteration 5 — Validation and future-ready baseline (Week 3)
-- Scope: polish + handoff-ready baseline.
-- Deliverables:
-  - Validate all user stories in §5.1 (User Stories).
-  - Document migration decision point to object storage (S3/CDN) from `POSTGRES_BYTEA`.
-  - Finalize operational runbook and local development guide.
-- Technical details:
-  - Acceptance tests for §5.1 user stories using Spanish prompt matrix (10–20 cases).
-  - Add data quality checks: stale stock detection, negative stock prevention, duplicate SKU constraints.
-  - Runbook sections: incident taxonomy, rollback path, OpenRouter fail-open strategy.
-  - Add ADR for image storage migration decision, with dual-read strategy:
-    - Read path supports both `bytea` and `SIGNED_URL`.
-    - Write path toggled by feature flag.
-  - Define API compatibility contract with front-end (item ordering, nullability, translation behavior).
-- Exit criteria:
-  - No functional blockers for inventory-only POC.
-  - Business owner accepts responses and Spanish policy behavior.
-  - **Demo kit** (§19) committed or documented path: sample data + `docs/DEMO.md` script validated once against staging.
+| Area | What to build |
+|------|----------------|
+| **Project** | Gradle (Groovy) or Kotlin DSL; Java **25** toolchain; Spring Boot **4.0.4**; `settings.gradle`, root `build.gradle`, `src/main/resources/application.yml` with `local` / `render` (or `prod`) profiles |
+| **Persistence** | Flyway `V1__initial_schema.sql`: tables **§6.1** (`products`, `product_variants`, `product_images`, `image_generation_jobs`, `agent_sessions`, `agent_messages`, `agent_handoffs`); indexes **§6.2**; `CREATE EXTENSION IF NOT EXISTS vector` + embedding store table aligned with [technical-design.md §11](../technical-design.md#11-embedding-store-schema) (metadata keys for `sku`, `variant_id`, `domain_id` / leather domain) |
+| **JPA** | Entities + repositories for `products`, `product_variants`, `product_images` (match §6 naming) |
+| **API** | `AgentController` `POST /api/agent/chat` + `ChatRequest` / `ChatResponse` DTOs (fields per §16.1: `responseText`, `usedTools`, `isHumanHandoff`, `items`) |
+| **Validation** | `jakarta.validation`: non-blank `sessionId`, `message`; max message length; **400** with stable error body (no stack traces to clients) |
+| **Health** | `/actuator/health` liveness; DB probe optional but recommended |
+| **Language policy** | `LanguageGuard` or post-processing hook documenting **Spanish answers** (§9.4); may be rule-based stub in Iteration 1 if full LLM loop lands in Iteration 2 |
+| **Config** | Hikari pool, `SPRING_DATASOURCE_*`, OpenRouter base URL + model env vars (§14) |
 
-### Iteration 6 — Embeddable chat widget foundation (Week 4 or parallel track)
-- Scope: **vanilla JavaScript** (ES5-compatible IIFE or ES module build) that third-party sites can drop in; **optional** thin jQuery adapter.
-- Deliverables:
-  - `LeatherChat.mount(selector, options)` API and/or **`data-leather-*`** attributes on the mount element (`api-base`, `title`, `placeholder`, `storage-key`).
-  - `POST {apiBase}/api/agent/chat` with JSON body `{ sessionId, message }`; parse `{ responseText, usedTools, isHumanHandoff }`.
-  - **Session continuity:** generate `sessionId` once per browser tab (`crypto.randomUUID()` when available) and persist in `sessionStorage` (key configurable).
-  - **Safe rendering:** assistant and user bubbles use **`textContent`** (or a trusted sanitizer) — never `innerHTML` with server text.
-  - Minimal UI: scrollable transcript, input, send button, disabled state while loading, error message area (no PII in errors shown to end users).
-  - **`apiBase`** points at the **integrator BFF** (same origin as the page or explicit partner origin); no client-side secrets.
-- Technical details:
-  - Single-file **IIFE** exposing `window.LeatherChat` for zero-build integrators; optional **ESM** export in same repo for bundlers.
-  - Demo/staging: provide a **minimal real BFF** (or dev Spring route) on the same host as `embed-demo.html` that **proxies** to Leather with server-side auth — **not** a fake assistant response (**§18**).
-- Exit criteria:
-  - `embed-demo.html` successfully chats **via the BFF** (same-origin `POST /api/agent/chat` to the proxy, which forwards to Leather).
-  - Smoke test: send message → receive Spanish `responseText`; handoff flag visible when `isHumanHandoff` is true.
+**Suggested packages** — `com.example.leather.api`, `...config`, `...domain`, `...persistence`, `...support` (exceptions).
 
-### Iteration 7 — Widget packaging, hardening, and integrator docs
-- Scope: production-minded delivery of the embed script.
-- Deliverables:
-  - **Minified** bundle + **SRI** example in docs; optional **npm** package publishing (`@your-scope/leather-chat`) or versioned CDN URL.
-  - Optional **Shadow DOM** root for style isolation (class prefix strategy documented if Shadow DOM is skipped).
-  - **jQuery** plugin `$.fn.leatherChat` only if product requires it — thin wrapper over `LeatherChat.mount`.
-  - **Integrator guide:** required `data-*` / options table, **BFF** contract (path, headers, session), CSP `connect-src` / `script-src` notes.
-  - **Automated tests (CI):** Playwright may **mock `fetch`** for fast UI regression **only**; this is **separate** from the **live demo** in **§19**, which requires **real** Postgres + OpenRouter.
-  - Spring **`app.cors.allowed-origins`** on Leather **if** anything still calls it from a browser; **optional** when all embed traffic is **BFF-only** (§18.6).
-- Exit criteria:
-  - Staging **BFF** proxies to Leather end-to-end; integrator README reviewed for security (no API keys in examples).
-  - **Demo path:** `embed-demo.html` + sample BFF (or `demo/` proxy) listed in **§19** so external viewers can run the widget demo without prod credentials.
+**Tests**
 
-### Suggested cadence and dependencies
-- 1–2 engineering days per iteration for a 1–2 person team (backend-first).
-- Every iteration ends with a demo script and a checkpoint:
-  - Functional acceptance
-  - Regression checklist
-  - Decision notes for next phase.
-- Dependencies:
-  - OpenRouter key provisioning before Iteration 1.
-- Delivery target:
-  - End of Iteration 3: Inventory + image POC in staging.
-  - End of Iteration 4: Render-ready deployment.
-  - **Iteration 6** can start after **`POST /api/agent/chat`** is stable (late Iteration 1–2); **BFF** route and optional Leather **CORS** can land in the same sprint or Iteration 7.
-  - **Iteration 7** before exposing the widget on a public marketing site or partner domains.
+- `AgentControllerTest` (MockMvc or WebTestClient): valid body → **200**; blank message → **400**; response JSON shape matches contract.
+- Repository tests (optional `@DataJpaTest`) or Flyway migration test: schema applies cleanly.
+- **No** live OpenRouter in default test task.
+
+**Quality gates (Iteration 1)**
+
+| ID | Gate | Must pass |
+|----|------|-----------|
+| **Q1.1** | Migrations apply on empty DB | Flyway up succeeds; `vector` extension present |
+| **Q1.2** | Health endpoint | `/actuator/health` **UP** with DB |
+| **Q1.3** | Chat contract | OpenAPI or doc comment matches implemented JSON; integration test or manual curl in `README` snippet |
+| **Q1.4** | Seed data | §7 (or subset) loadable; at least one `product` + `variant` queryable via repository |
+| **Q1.5** | Baseline §15.0 | All **G0.1–G0.8** satisfied |
+
+**Exit criteria (DoD):** App starts locally; DB + seed; **`/api/agent/chat`** returns a coherent JSON response for a canned or LLM-backed path; stakeholders can hit health + one chat call from docs.
+
+---
+
+### Iteration 2 — Agent, tools, catalog ingest, and RAG (Week 1–2)
+
+**Goal:** **LangChain4j 1.12.2** + **`langchain4j-agentic` 1.12.2-beta22** — **`UntypedAgent`** from **`AgenticServices.agentBuilder()`**; full **`@Tool`** set for inventory; **`searchCatalogRag`** over **pgvector**; CSV/XLSX (or admin API) **ingest** that upserts relational rows **and** rebuilds embeddings (§4.8, §4.8.1 category codes).
+
+**Prerequisites:** Iteration 1 complete; embedding table exists; **same** `EmbeddingModel` bean for ingest and query.
+
+**Deliverables**
+
+| Area | What to build |
+|------|----------------|
+| **Agent** | `LlmConfig`: `ChatModel` (OpenRouter), `EmbeddingModel`; bean **`UntypedAgent leatherInventoryAgent`** per §5.D (system message, `userMessageProvider`, tools, `invokeWithAgenticScope`) |
+| **Tools — stock truth** | `@Tool` methods: `getStockBySku`, `getStockByVariant`, `getInventoryByMaterialSize` (or equivalents) reading **only** JPA/repositories → SQL |
+| **Tools — RAG** | **`searchCatalogRag`**: `EmbeddingStoreContentRetriever` / PgVector store; metadata returns **`sku`** + **variant id** for downstream stock calls; optional hybrid re-rank (query-pipeline patterns) |
+| **Tools — discovery** | Optional `searchProducts` (SQL/keyword) supplementary only |
+| **Tools — other** | `getProductImageGallery`, handoff tool or policy; TOON formatting for tabular returns when `app.agent.toon.enabled` (§17) |
+| **Façade** | `LeatherInventoryChatFacade`: map Agentic result → `ChatResponse`; populate `usedTools`, `items`, `isHumanHandoff` |
+| **Persistence** | Append `agent_messages` per `sessionId`; `agent_handoffs` when escalating |
+| **Ingest** | Job or **`POST /api/admin/catalog/ingest`**: parse file → upsert `products` / `variants` / images → build chunks (name + attributes + description + **category** from §4.8.1) → embed → replace vectors per SKU/domain |
+| **Prompting** | System prompt: RAG-first discovery; **never** invent stock; Spanish (§5.4–5.5) |
+
+**Tests**
+
+- **Unit:** each `@Tool` with mocked repos / store; `searchCatalogRag` returns metadata needed for stock tool.
+- **Integration (recommended):** Testcontainers **PostgreSQL + pgvector**; ingest sample rows; assert vector row count; mock `ChatModel` for deterministic agent test **or** single scripted tool-call test.
+- **Regression:** “category + color + size” query path uses RAG metadata then stock tool (assert tool order or final payload shape in integration test if feasible).
+
+**Quality gates (Iteration 2)**
+
+| ID | Gate | Must pass |
+|----|------|-----------|
+| **Q2.1** | Agentic only | **No** primary `switch`/router replacing LLM tool choice (precheck allowed per §5.D) |
+| **Q2.2** | Vector dimension | Embedding vector size matches DB column + index |
+| **Q2.3** | `searchCatalogRag` metadata | Hits include **sku** (and variant identifier) for stock tools |
+| **Q2.4** | TOON default | With flag on, tabular tool payloads use TOON (§17); test or snapshot |
+| **Q2.5** | Handoff | At least **2** scenarios covered by tests or scripted checklist (unsupported intent, low confidence) |
+| **Q2.6** | Ingest idempotency | Re-run ingest on same file does not duplicate business keys (document strategy) |
+| **Q2.7** | Baseline §15.0 | **G0.1–G0.8**; **G0.9** recommended |
+
+**Exit criteria (DoD):** Spanish inventory Q&A end-to-end with **real** OpenRouter on dev/staging; `usedTools` shows **`searchCatalogRag`** + stock tools for discovery-style questions; ingest refreshes vectors.
+
+---
+
+### Iteration 3 — Image generation and storage (Week 2)
+
+**Goal:** Safe **image** flow: gallery read, **`generateProductImage`**, `image_generation_jobs` lifecycle, OpenRouter image client, storage strategy (URL-first per §5.8; optional `bytea` path documented).
+
+**Prerequisites:** Iteration 2; product/variant rows exist.
+
+**Deliverables**
+
+| Area | What to build |
+|------|----------------|
+| **Services** | `OpenRouterImageClient`, `InventoryImageGenerationService`, `InventoryImageTools` (`@Tool`) |
+| **Jobs** | `PENDING` → `DONE` / `FAILED` / `TIMEOUT`; retry/backoff; idempotency on `(sku, variant, prompt_hash)` or equivalent |
+| **Storage** | Persist **URL** in `product_images` (default); optional `bytea` + `image_ref_type` if POC requires |
+| **Guardrails** | Rate limits, explicit user intent before generate (§5.8.7), template prompts |
+| **Observability** | Log job id, duration, outcome (**no** image bytes in logs) |
+
+**Tests**
+
+- Unit: client wrapper with mocked HTTP; service state transitions.
+- Integration: job row created and completed with stubbed OpenRouter response (WireMock).
+
+**Quality gates (Iteration 3)**
+
+| ID | Gate | Must pass |
+|----|------|-----------|
+| **Q3.1** | No silent failure | FAILED jobs have `failure_reason` (internal); user-facing message is generic |
+| **Q3.2** | Rate limit | Configurable cap per session/product; test or config doc |
+| **Q3.3** | MIME / size validation | Reject invalid responses before persist |
+| **Q3.4** | Baseline §15.0 | **G0.1–G0.8** |
+
+**Exit criteria (DoD):** Spanish “show image” flow returns gallery URL or generation result; errors handled; §5.8.1–5.8.2 behavior documented.
+
+---
+
+### Iteration 4 — Render, reliability, and operations (Week 3)
+
+**Goal:** **Docker** image, platform deploy config (e.g. Render), structured logging, metrics, rate limits for **chat** and **OpenRouter**, smoke tests.
+
+**Prerequisites:** Iterations 1–3 feature-complete on staging.
+
+**Deliverables**
+
+| Area | What to build |
+|------|----------------|
+| **Container** | Multi-stage `Dockerfile`, JDK 25, non-root user, JVM flags for container |
+| **Deploy** | `render.yaml` or equivalent; env var documentation; health check path |
+| **Resilience** | Timeouts + retries on OpenRouter; circuit breaker optional |
+| **Limits** | `RateLimitingFilter` or gateway rule: per IP / per `sessionId` |
+| **Metrics** | Micrometer: `chat.requests`, `tools.*`, errors; optional Prometheus scrape |
+| **Smoke** | Script or CI job: health + one chat call against staging (may use mock profile in CI; prod path manual) |
+
+**Quality gates (Iteration 4)**
+
+| ID | Gate | Must pass |
+|----|------|-----------|
+| **Q4.1** | Deploy | One-click or documented deploy produces **healthy** service |
+| **Q4.2** | Logs | Correlation id + `sessionId` + tool name on chat path (**no** PII in message content in logs — use length/hash if needed) |
+| **Q4.3** | Secrets | All secrets from env / secret manager in deployed config |
+| **Q4.4** | Baseline §15.0 | **G0.1–G0.8** |
+
+**Exit criteria (DoD):** Staging URL runs full inventory + image demo; on-call can use runbook snippet for restart and OpenRouter outage.
+
+---
+
+### Iteration 5 — Validation, data quality, demo kit (Week 3–4)
+
+**Goal:** **Acceptance** against §5.1 user stories, Spanish **prompt matrix**, data-quality rules, **demo kit** (§19) + **`docs/DEMO.md`** validated on **live** stack once.
+
+**Prerequisites:** Staging stable (Iteration 4).
+
+**Deliverables**
+
+| Area | What to build |
+|------|----------------|
+| **Matrix** | 10–20 Spanish prompts covering: SKU stock, RAG discovery, material/size/color, image, handoff, out-of-scope |
+| **Data quality** | DB constraints / checks: no negative stock, unique SKU, category codes from §4.8.1 |
+| **Runbook** | Incident types, rollback, OpenRouter degradation behavior |
+| **ADR** | Image storage evolution (bytea → CDN) if applicable |
+| **Demo kit** | `demo/README.md`, `demo/catalog/sample-catalog.csv`, `demo/scripts/chat-smoke.sh`, `demo/scripts/load-sample-data.sh`, `docs/DEMO.md` per §19 |
+
+**Quality gates (Iteration 5)**
+
+| ID | Gate | Must pass |
+|----|------|-----------|
+| **Q5.1** | User stories | Traceability table: story → test or manual step |
+| **Q5.2** | Prompt matrix | All cases pass or documented known gaps with ticket |
+| **Q5.3** | Demo live run | **`chat-smoke.sh`** (or equivalent) succeeds against **real** Postgres + pgvector + OpenRouter |
+| **Q5.4** | Demo data | No real PII; fictional SKUs (§19) |
+| **Q5.5** | Baseline §15.0 | **G0.1–G0.8** |
+
+**Exit criteria (DoD):** Business sign-off on POC behavior; demo kit reproducible; **§19** checklist complete.
+
+---
+
+### Iteration 6 — Embeddable chat widget foundation (Week 4 or parallel)
+
+**Goal:** **Vanilla JS** widget + **`embed-demo.html`** + **real BFF** proxy (§18); safe DOM; session in `sessionStorage`.
+
+**Prerequisites:** Stable **`POST /api/agent/chat`** (late Iteration 2+).
+
+**Deliverables**
+
+| Area | What to build |
+|------|----------------|
+| **API surface** | `LeatherChat.mount(selector, options)`; `data-leather-*` attributes (§18) |
+| **Network** | `fetch` POST to **same-origin** BFF; BFF forwards to Leather with server credentials |
+| **UX** | Transcript, input, loading state, errors without leaking internals |
+| **Security** | `textContent` for assistant text; **no** secrets in bundle |
+
+**Tests**
+
+- Manual: `embed-demo.html` + BFF on localhost.
+- Optional: Playwright with **mocked** `fetch` (UI only).
+
+**Quality gates (Iteration 6)**
+
+| ID | Gate | Must pass |
+|----|------|-----------|
+| **Q6.1** | No secrets in JS | Grep bundle for `OPENROUTER`, `Bearer`, `sk-` |
+| **Q6.2** | XSS | No `innerHTML` with server `responseText` |
+| **Q6.3** | BFF real | Demo uses **real** proxy, not hard-coded fake replies |
+| **Q6.4** | Baseline §15.0 | **G0.1–G0.8** (widget repo may be separate module — gates apply to committed artifact) |
+
+**Exit criteria (DoD):** Partner-style page can chat in Spanish through BFF; handoff flag shown in UI when true.
+
+---
+
+### Iteration 7 — Widget packaging, hardening, integrator docs
+
+**Goal:** Minified build, **SRI** example, integrator README, optional npm package, optional Shadow DOM; CORS on Leather only if needed (§18.6).
+
+**Prerequisites:** Iteration 6.
+
+**Deliverables**
+
+| Area | What to build |
+|------|----------------|
+| **Build** | `leather-chat.min.js` (or named bundle), source map policy documented |
+| **Docs** | Integrator guide: CSP, `connect-src`, BFF contract, version pinning |
+| **jQuery** | Optional `$.fn.leatherChat` thin wrapper |
+| **CI** | Playwright smoke (mock fetch OK); **live** demo still per §19 |
+| **CORS** | Document Leather CORS vs BFF-only model |
+
+**Quality gates (Iteration 7)**
+
+| ID | Gate | Must pass |
+|----|------|-----------|
+| **Q7.1** | Supply chain | SRI hash documented for released script version |
+| **Q7.2** | Versioning | Semver or dated CDN path; changelog snippet |
+| **Q7.3** | Security review | Checklist: §18 + no credentials in samples |
+| **Q7.4** | Baseline §15.0 | **G0.1–G0.8** |
+
+**Exit criteria (DoD):** Integrator can embed from doc instructions alone; §19 updated with widget + BFF paths; ready for public marketing **only** after Q7.3.
+
+---
+
+### 15.9 Suggested cadence and dependencies
+
+| Item | Guidance |
+|------|-----------|
+| **Team size** | ~1–2 engineers: expect **~3–5 days** per iteration for 1–5; 6–7 parallelizable after chat API stable |
+| **Every iteration ends with** | Short demo script, regression note, and **all** iteration **Q** gates + §**15.0** **G0** gates checked |
+| **Dependencies** | OpenRouter key + Postgres **before** Iteration 1; **pgvector** image for local Docker |
+| **Milestones** | End **3:** inventory + images staging; **4:** production-like deploy; **5:** demo kit + acceptance; **7:** embed GA for external sites |
+
+**Parallel work:** Iteration **6** can start after **`POST /api/agent/chat`** is stable (end of Iteration **2**). **BFF** may ship in **6** or **7**. **Iteration 7** before exposing the widget on **public** partner or marketing domains.
+
+---
 
 ## 16. Sample code (POC)
 

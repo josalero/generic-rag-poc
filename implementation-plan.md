@@ -732,6 +732,7 @@ Map PRs/milestones to [diseno § 15](./leather-inventory-agent/diseno-agente-con
 ### 18.6 Tests and quality gates
 
 - Apply **[§ 1 Quality Gates](#1-quality-gates)** to the leather module.
+- Follow **leather design [§ 15 — Implementation plan with iterations](./leather-inventory-agent/diseno-agente-consultas-leather-openrouter.md#15-implementation-plan-with-iterations)**: **§15.0** baseline quality gates (**G0.1–G0.9**) apply to **every** leather iteration; **§15.1–15.7** add iteration-specific **Q** gates (Q1.x … Q7.x) as **definition of done** per sprint.
 - **Unit / fast CI:** mock `ChatModel` / `EmbeddingModel` where appropriate; **no live OpenRouter** required on every PR; contract tests for DTOs and tool payloads.
 - **Integration tests (recommended, still CI-friendly):** Testcontainers PostgreSQL **with pgvector**; mock LLM/embed if you want deterministic CI — assert ingest → vectors → **`searchCatalogRag`** metadata → stock tool SQL-backed qty.
 - **Demo kit path ([§ 18.8](#188-demo-kit-and-samples), design §19):** the **stakeholder demo** is **not** mocked — **real PostgreSQL + pgvector**, **real OpenRouter** (`OPENROUTER_API_KEY`), and **real** embed/ingest for the showcase. Do not document or script a “fake assistant” for that path.
