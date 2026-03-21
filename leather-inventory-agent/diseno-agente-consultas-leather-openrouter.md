@@ -7,7 +7,7 @@
 1. [Objective](#1-objective)
 2. [Initial scope (POC)](#2-initial-scope-poc)
 3. [Proposed architecture](#3-proposed-architecture)
-4. [Software components](#4-software-components) — includes [§4.8 Catalog ingest (XLSX/CSV) and hybrid RAG](#48-catalog-ingest-xlsxcsv-and-hybrid-rag)
+4. [Software components](#4-software-components) — includes [§4.8 Catalog ingest (XLSX/CSV) and hybrid RAG](#48-catalog-ingest-xlsxcsv-and-hybrid-rag) and [§4.8.1 Product category taxonomy](#481-product-category-taxonomy-relational-and-rag)
 5. [OpenRouter + LangChain4j](#5-openrouter--langchain4j)
 6. [PostgreSQL data model](#6-postgresql-data-model)
 7. [Test data](#7-test-data)
@@ -160,6 +160,38 @@ flowchart LR
 5. **Store** in **pgvector** (LangChain4j **`EmbeddingStoreIngestor`** / `PgVectorEmbeddingStore` — same patterns as generic RAG).
 
 **Query-time:** user message → **Agentic** loop: model typically calls **`searchCatalogRag`** first for discovery (possibly multiple times with refined queries) → then **`getStockByVariant`** / **`getInventoryByMaterialSize`** before stating availability or counts. **TOON** (§17) applies to **tabular tool outputs**, not to raw embedding hits.
+
+#### 4.8.1 Product category taxonomy (relational and RAG)
+
+Use a **controlled set of category codes** in `products.category` and in **embedding metadata** (e.g. `category` on chunks) so shoppers can ask in natural Spanish (“¿tienen **chaquetas** de cuero?”, “**shorts** negros”, “**botas** marrones”) while filters and reporting stay stable.
+
+| Code | Article type (EN) | Typical Spanish in chunks / descriptions | RAG notes |
+|------|-------------------|------------------------------------------|-----------|
+| `JACKET` | Jackets, blazers, bombers (leather) | chaqueta, blazer, campera, cazadora | Outerwear; often size + color + fit |
+| `COAT` | Coats, trenches, parkas (leather) | abrigo, trench, sobretodo | Long outerwear |
+| `VEST` | Vests, waistcoats | chaleco, chaleco sin mangas | Layering |
+| `SHORT` | Shorts, bermudas (leather / leather-trim) | shorts, bermudas | Warm-weather bottoms |
+| `PANT` | Trousers, pants, leggings (leather) | pantalón, pantalones, calzas cuero | Bottoms; inseam / length in variant or description |
+| `SKIRT` | Skirts | falda | Length + size |
+| `TOP` | Shirts, blouses, crop tops (leather) | camisa, blusa, top | Upper body; less common in full leather but include if sold |
+| `DRESS` | Dresses | vestido | Full garment |
+| `FOOTWEAR` | Shoes, boots, loafers, sneakers (leather) | zapatos, botas, mocasines, zapatillas cuero | Existing sample uses boots here |
+| `BAG` | Handbags, backpacks, totes, briefcases | bolso, mochila, maletín, cartera grande | Existing `BAG` rows |
+| `WALLET` | Wallets, card holders | billetera, cartera, tarjetero | Small leather goods |
+| `BELT` | Belts | cinturón, correa | Often waist size; existing `BELT` rows |
+| `GLOVE` | Gloves | guantes | Size S/M/L |
+| `HEADWEAR` | Hats, caps (leather / leather brim) | gorra, sombrero, boina | One-size or S/M/L |
+| `ACCESSORY` | Bracelets, keychains, watch straps, misc. | pulsera, llavero, correa de reloj | Catch-all for small items |
+| `TECH_SLV` | Laptop sleeves, tablet covers, phone pouches | funda laptop, funda tablet, funda móvil | Flat / dimension-based |
+| `OTHER` | Uncategorized | use sparingly | Migrate to a specific code when possible |
+
+**Ingest / chunking (anticipate RAG):**
+
+- **Repeat category in prose:** each chunk should include the article type in **both** languages where useful (e.g. “Chaqueta de cuero genuino, color negro, corte slim…” / “Black genuine leather jacket…”) so semantic search matches colloquial queries.
+- **Metadata:** store the **same code** as `category` (and optionally `subcategory` or `style` free text for “biker”, “minimal”, “office”) for **pre-filter** or **post-filter** in `searchCatalogRag` if you add metadata filters later.
+- **Spreadsheet column:** CSV/XLSX may use a Spanish column (`categoría`) — map to the **code** on upsert; document the mapping in operator runbooks.
+
+**Existing seed data** in §7 uses `BAG`, `BELT`, `FOOTWEAR`, `WALLET`, `ACCESSORY` — align new rows with the table above (rename `ACCESSORY` only if you split into `GLOVE` / `HEADWEAR` / etc.).
 
 **Reference docs** in this repo for implementation detail:
 
@@ -713,6 +745,9 @@ public interface InventoryImageTools {
 ## 6. PostgreSQL data model
 
 ### 6.1 Minimum schema
+
+**`products.category`:** use the **controlled codes** in **[§4.8.1](#481-product-category-taxonomy-relational-and-rag)** (e.g. `JACKET`, `SHORT`, `FOOTWEAR`, `BAG`) so RAG metadata, SQL filters, and spreadsheets stay aligned.
+
 ```sql
 CREATE TABLE products (
   id BIGSERIAL PRIMARY KEY,
