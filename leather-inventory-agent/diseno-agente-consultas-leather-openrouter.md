@@ -54,20 +54,20 @@ Implement a conversational assistant with agentic capabilities for a leather sto
 ```mermaid
 flowchart LR
   subgraph INGEST[Catalog ingest]
-    XLSX[CSV / XLSX + images]
-    XLSX --> ETL[Parse upsert + chunk embed]
+    XLSX["CSV / XLSX + images"]
+    XLSX --> ETL["Parse upsert + chunk embed"]
     ETL --> PG[(PostgreSQL relational)]
     ETL --> VEC[(pgvector chunks)]
   end
-  U[Customer (Web / WhatsApp / API)] --> API[Spring Boot REST/Streaming API]
-  W[Embeddable chat widget] --> API
-  API --> OR[Orchestrator Agent (LangChain4j Agentic)]
-  OR -->|LLM Call| LLM[OpenRouter (OpenAI-compatible API)]
+  U["Customer — Web, WhatsApp, API"] --> API["Spring Boot REST / streaming API"]
+  W["Embeddable chat widget"] --> API
+  API --> OR["Orchestrator — LangChain4j Agentic"]
+  OR -->|LLM Call| LLM["OpenRouter — OpenAI-compatible API"]
   OR -->|Tool call| DS[(Domain Services)]
   DS --> PG
   DS --> VEC
-  DS --> Human[Handoff to human agent / ticket]
-  OR --> Telemetry[Logs, traces, metrics]
+  DS --> Human["Handoff — human agent or ticket"]
+  OR --> Telemetry["Logs, traces, metrics"]
 ```
 
 ## 4. Software components
@@ -339,23 +339,23 @@ public interface ImageGenerationTools {
 ```mermaid
 flowchart TD
   subgraph Client
-    C[Customer / Operator UI]
+    C["Customer or operator UI"]
   end
 
   subgraph API
-    E[Spring Boot Controller]
-    O[LangChain4j Orchestrator]
-    T[Tools Layer]
+    E["Spring Boot Controller"]
+    O["LangChain4j Orchestrator"]
+    T["Tools Layer"]
   end
 
   subgraph Data
     PG[(PostgreSQL)]
-    FS[(Static/CDN Image URLs)]
+    FS["Static or CDN image URLs"]
   end
 
   subgraph AI
-    LLM[OpenRouter LLM<br/>Inventory + Spanish policy]
-    IMG[OpenRouter Image API]
+    LLM["OpenRouter LLM — inventory + Spanish policy"]
+    IMG["OpenRouter Image API"]
   end
 
   C --> E
@@ -497,18 +497,18 @@ flowchart TD
 ```mermaid
 flowchart LR
   subgraph Internet
-    U[Customers / Frontends]
+    U["Customers and frontends"]
   end
 
   subgraph Render
-    S[Leather Agent Service (Docker)]
-    H[Health & Logs /actuator]
+    S["Leather Agent Service — Docker"]
+    H["Health and logs — actuator"]
   end
 
   subgraph External Services
-    OR[OpenRouter Chat + Image API]
+    OR["OpenRouter chat + image API"]
     DB[(PostgreSQL)]
-    CDN[Image CDN / Object Storage]
+    CDN["Image CDN or object storage"]
   end
 
   U --> S
@@ -518,7 +518,7 @@ flowchart LR
   OR --> CDN
   S --> CDN
   H --> U
-  S -->|handoff| T[Ticket/Support Queue]
+  S -->|handoff| T["Ticket or support queue"]
 ```
 
 ### 5.8 Image storage and generation design
@@ -886,23 +886,23 @@ VALUES
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Usuario as Customer (Spanish UI)
+    actor Usuario as Customer Spanish UI
     participant API as Spring Controller
     participant Agent as LangChain4j Agent
     participant Tools as Inventory Tools
     participant DB as PostgreSQL
-    Usuario->>API: POST /api/agent/chat {"sessionId":"s-102","message":"¿Queda cuero vegano en color negro talla M?"}
-    API->>Agent: UntypedAgent.invokeWithAgenticScope(...) (LangChain4j AgenticServices)
-    Agent->>Tools: searchCatalogRag("cuero vegano negro talla M")
-    Tools->>DB: pgvector similarity + metadata
-    DB-->>Tools: top chunks with sku / variantId
-    Tools-->>Agent: RAG hits (Spanish excerpts + metadata)
-    Agent->>Tools: getInventoryByMaterialSize(material=\"vegano\", color=\"negro\", size=\"M\") or getStockByVariant(...)
-    Tools->>DB: SELECT products + variants + stock
+    Usuario->>API: POST chat — stock query in Spanish
+    API->>Agent: invokeWithAgenticScope via AgenticServices
+    Agent->>Tools: searchCatalogRag refined query
+    Tools->>DB: pgvector similarity and metadata
+    DB-->>Tools: top chunks with sku and variantId
+    Tools-->>Agent: RAG hits Spanish excerpts and metadata
+    Agent->>Tools: getInventoryByMaterialSize vegano negro M
+    Tools->>DB: SELECT products variants stock
     DB-->>Tools: rows with exact stock
     Tools-->>Agent: Normalized tool response
     Agent-->>API: JSON response in Spanish
-    API-->>Usuario: "Sí, tenemos 9 unidades de cuero vegano negro talla M."
+    API-->>Usuario: Spanish answer with stock count
 ```
 
 Request (from frontend):
@@ -935,17 +935,17 @@ Response:
 
 ```mermaid
 flowchart LR
-    A[Cliente pide imagen en español] --> B[API chat]
-    B --> C[LLM decide herramienta]
-    C --> D{¿Imagen ya existe?}
-    D -->|Sí| E[Leer product_images]
-    D -->|No| F[create image_generation_job]
-    F --> G[OpenRouter image endpoint]
-    G --> H[Guardar URL/Binary]
-    H --> I[Actualizar job: DONE]
-    E --> J[Responder con item + referencia]
+    A["Cliente pide imagen en español"] --> B["API chat"]
+    B --> C["LLM elige herramienta"]
+    C --> D{"Imagen ya existe"}
+    D -->|Sí| E["Leer product_images"]
+    D -->|No| F["create image_generation_job"]
+    F --> G["OpenRouter image endpoint"]
+    G --> H["Guardar URL o binario"]
+    H --> I["Actualizar job DONE"]
+    E --> J["Responder con item y referencia"]
     I --> J
-    J --> K[Respuesta final en español]
+    J --> K["Respuesta final en español"]
 ```
 
 End-to-end request:
